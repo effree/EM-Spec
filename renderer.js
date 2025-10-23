@@ -682,6 +682,8 @@ class AudioSpectrogram {
     updateElement('colormapSelect', this.settings.colormap, 'colormapValue', 
       v => v.charAt(0).toUpperCase() + v.slice(1));
     updateElement('dbRange', this.settings.dbRange, 'dbRangeValue');
+    updateElement('fftSize', this.settings.fftSize, 'fftSizeValue');
+    updateElement('hopSize', this.settings.hopSize, 'hopSizeValue');
     updateElement('gain', this.settings.gain, 'gainValue', v => v.toFixed(1));
     updateElement('freqScale', this.settings.frequencyScale, 'freqScaleValue', v => v.toFixed(1));
     updateElement('lowEnd', this.settings.lowEndBoost, 'lowEndValue', v => v.toFixed(1) + 'x');
@@ -946,9 +948,43 @@ class AudioSpectrogram {
     const currentGradient = this.generateColormapGradient(this.settings.colormap);
     const currentName = this.settings.colormap.charAt(0).toUpperCase() + this.settings.colormap.slice(1);
 
+    // Generate FFT size options (powers of 2 from 1024 to 16384)
+    const fftSizes = [1024, 2048, 4096, 8192, 16384];
+    const fftSizeOptions = fftSizes.map(size => 
+      `<option value="${size}" ${this.settings.fftSize === size ? 'selected' : ''}>${size}</option>`
+    ).join('');
+
+    // Generate hop size options (powers of 2 from 1024 to 16384)
+    const hopSizeOptions = fftSizes.map(size => 
+      `<option value="${size}" ${this.settings.hopSize === size ? 'selected' : ''}>${size}</option>`
+    ).join('');
+
+
     this.settingsContent.innerHTML = `
       <div class="setting-group">
         <button id="resetSettingsBtn" class="reset-btn">Reset to Default</button>
+      </div>
+
+      <div class="fft-group">
+        <div class="setting-group">
+          <div class="setting-label">
+            <label>FFT Size</label>
+            <span class="setting-value" id="fftSizeValue">${this.settings.fftSize}</span>
+          </div>
+          <select id="fftSizeSelect" class="setting-dropdown">
+            ${fftSizeOptions}
+          </select>
+        </div>
+
+        <div class="setting-group">
+          <div class="setting-label">
+            <label>Hop Size</label>
+            <span class="setting-value" id="hopSizeValue">${this.settings.hopSize}</span>
+          </div>
+          <select id="hopSizeSelect" class="setting-dropdown">
+            ${hopSizeOptions}
+          </select>
+        </div>
       </div>
 
       <div class="setting-group">
@@ -1079,6 +1115,18 @@ class AudioSpectrogram {
 
     // Custom colormap dropdown handlers
     this.setupColormapDropdown();
+
+    document.getElementById('fftSizeSelect').addEventListener('change', (e) => {
+      this.settings.fftSize = parseFloat(e.target.value);
+      document.getElementById('fftSizeValue').textContent = e.target.value;
+      this.saveSettings();
+    });
+
+    document.getElementById('hopSizeSelect').addEventListener('change', (e) => {
+      this.settings.hopSize = parseFloat(e.target.value);
+      document.getElementById('hopSizeValue').textContent = e.target.value;
+      this.saveSettings();
+    });
 
     addListener('dbRange', 'input', (e) => {
       this.settings.dbRange = parseFloat(e.target.value);

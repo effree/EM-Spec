@@ -238,8 +238,21 @@ select option:hover {
     flex-wrap: wrap;
 }
 
+.fft-group {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
 .button-group .setting-group {
     display: flex;
+    height: 100%;
+    flex: auto;
+    margin: 0 !important;
+}
+
+.fft-group .setting-group {
     height: 100%;
     flex: auto;
     margin: 0 !important;
