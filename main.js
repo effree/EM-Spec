@@ -99,7 +99,7 @@ app.on('ready', () => {
   mainWindow.setFullScreenable(false);
 
   mainWindow.loadFile('index.html');
-  mainWindow.webContents.openDevTools();
+  // mainWindow.webContents.openDevTools();
 
   ensureStateFile();
   watchStateFile();
