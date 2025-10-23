@@ -1,0 +1,511 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    webkit-app-region: drag;
+}
+
+html {
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+html ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+    background-color: transparent;
+    -webkit-border-radius: 100px;
+}
+
+html ::-webkit-scrollbar-thumb {
+    background-color: #424242;
+    -webkit-border-radius: 100px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+html ::-webkit-scrollbar-thumb:active {
+    background-color: #535353;
+}
+
+body {
+    background-color: rgba(0, 0, 0, 0);
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+#container {
+    width: 100vw;
+    height: 100vh;
+    position: relative;
+    -webkit-app-region: drag;
+}
+
+#canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    pointer-events: none;
+}
+
+.exit-btn, .settings-btn, .pause-btn {
+    position: absolute;
+    width: 19px;
+    background: rgba(255, 255, 255, 0);
+    border: 1px solid rgba(255, 255, 255, 0);
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    font-size: 18px;
+    transition: opacity 0.25s ease-in-out, background 0.25s ease-in-out, border-color 0.25s ease-in-out;
+    opacity: 0;
+    z-index: 100;
+    -webkit-app-region: no-drag;
+}
+
+#container:hover .exit-btn,
+#container:hover .settings-btn,
+#container:hover .pause-btn {
+    opacity: .4;
+    background: rgba(255, 255, 255, 0);
+    border-color: rgba(255, 255, 255, 0);
+}
+
+.pause-btn.paused {
+    opacity: .8 !important;
+    color: #00d4ff !important;
+}
+
+.exit-btn {
+    top: 3px;
+    right: 3px;
+}
+
+.pause-btn {
+    bottom: 3px;
+    right: 32px;
+}
+
+.settings-btn {
+    bottom: 3px;
+    right: 9px;
+}
+
+#settingsPanel {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100%;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    -webkit-app-region: no-drag;
+    max-width: 80vw;
+    min-width: calc(50vw + 4rem);
+    overflow-y: auto;
+    resize: horizontal;
+    background: rgba(20, 20, 20, 0.79);
+    backdrop-filter: blur(10px);
+}
+
+#settingsPanel.open {
+    display: flex;
+}
+
+#container:has(+ #settingsPanel.open) #settingsBtn {
+    opacity: .75;
+    background: rgba(255, 255, 255, 0);
+    border-color: rgba(255, 255, 255, 0);
+}
+
+.settings-content {
+    border-radius: 5px;
+    padding: 0 1rem;
+    width: 100%;
+    height: calc(100% - 2rem);
+    overflow-y: auto;
+    scrollbar-gutter: stable both-edges;
+}
+
+.settings-content h2 {
+    margin-bottom: 10px;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.setting-group {
+    margin-bottom: 9px;
+}
+
+.setting-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 3px;
+    font-size: 14px;
+    color: #ccc;
+}
+
+.setting-label label {
+    font-weight: 500;
+    font-size: 11px;
+    text-transform: uppercase;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif
+}
+
+.setting-value {
+    font-size: 12px;
+    color: #888;
+    font-family: 'Monaco', monospace;
+}
+
+input[type="range"] {
+    width: 100%;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.1);
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #00d4ff;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 212, 255, 0.4);
+}
+
+input[type="range"]::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #00d4ff;
+    cursor: pointer;
+    border: none;
+    box-shadow: 0 2px 8px rgba(0, 212, 255, 0.4);
+}
+
+select {
+    width: 100%;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 12px;
+    cursor: pointer;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 16px;
+    padding-right: 32px;
+}
+
+select:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+select:focus {
+    outline: none;
+    border-color: rgba(0, 212, 255, 0.5);
+}
+
+select option {
+    background: #1a1a1a;
+    color: #fff;
+    padding: 8px;
+}
+
+select option:hover {
+    background: rgba(0, 212, 255, 0.2);
+}
+
+.button-group {
+    height: 3rem;
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+}
+
+.button-group .setting-group {
+    display: flex;
+    height: 100%;
+    flex: auto;
+    margin: 0 !important;
+}
+
+.checkbox-group {
+    align-items: center;
+    margin: 4px;
+    border-radius: 4px;
+    border: 1px solid #d0d0d038;
+    overflow: auto;
+    width: 100%;
+}
+
+.checkbox-group label {
+    float: left;
+    width: 100%;
+    min-width: 5rem;
+    height: 100%;
+    cursor: pointer;
+}
+
+.checkbox-group label span {
+    text-align: center;
+    padding: 3px 0px;
+    display: block;
+    height: 100%;
+    align-content: center;
+    background: rgb(53, 53, 53);
+    color: rgb(92, 92, 92);
+    text-shadow: 1px 1px 4px rgba(0,0,0,.5);
+    transition: all ease .25s;
+    font-size: 14px;
+    padding: 0 .2rem;
+}
+
+.checkbox-group label input {
+    display: none;
+}
+
+.checkbox-group input:checked + span {
+    background: rgba(0, 212, 255, 0.8);
+    color: #e0e0e0;
+}
+
+.checkbox-group:hover input:checked + span {
+    background: rgba(55, 222, 255, 0.8);
+    color: #fff;
+}
+
+.checkbox-group:hover label span {
+    background: rgb(70, 70, 70);
+    color: rgb(110, 110, 110);
+}
+
+#status {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    font-size: 11px;
+    color: #666;
+    font-family: 'Monaco', monospace;
+    z-index: 5;
+    opacity: 0;
+    display: none;
+}
+#container:hover #status {
+    display: flex;
+    opacity: 1;
+    transition: opacity .35s ease;
+}
+#blur-layer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    bottom: 0;
+    border-radius: 5px;
+    background-image: linear-gradient(to right, #00000017 0 3rem, #ffffff70 15rem 3rem);
+    mix-blend-mode: overlay;
+    backdrop-filter: blur(.5px);
+    pointer-events: none;
+}
+
+::-webkit-resizer {
+    width: 16px;
+    height: 16px;
+    cursor: ew-resize;
+    background:
+    radial-gradient(circle, #555 2px, transparent 0) 50% 25% / 2px 2px no-repeat,
+    radial-gradient(circle, #555 2px, transparent 0) 50% 50% / 2px 2px no-repeat,
+    radial-gradient(circle, #555 2px, transparent 0) 50% 75% / 2px 2px no-repeat;
+}
+
+/* Frequency hover display */
+#freqHover {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 100;
+    display: none;
+}
+
+#freqHover.active {
+    display: block;
+}
+
+#freqLine {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: rgba(0, 212, 255, 0.8);
+    box-shadow: 0 0 8px rgba(0, 212, 255, 0.6);
+    pointer-events: none;
+}
+
+#freqLabel {
+    position: absolute;
+    left: 10px;
+    background: rgba(20, 20, 20, 0.95);
+    border: 1px solid rgba(0, 212, 255, 0.5);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-family: 'Monaco', monospace;
+    font-size: 12px;
+    color: #00d4ff;
+    white-space: nowrap;
+    backdrop-filter: blur(10px);
+    transform: translateY(-50%);
+    pointer-events: none;
+}
+
+#freqLabel .note {
+    font-size: 14px;
+    font-weight: bold;
+    margin-right: 8px;
+}
+
+#freqLabel .cents {
+    font-size: 10px;
+    color: #888;
+    margin-left: 4px;
+}
+
+.reset-btn {
+    width: 100%;
+    padding: 10px;
+    background: rgba(255, 59, 48, 0.15);
+    border: 1px solid rgba(255, 59, 48, 0.3);
+    border-radius: 6px;
+    color: #ff3b30;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.reset-btn:hover {
+    background: rgba(255, 59, 48, 0.25);
+    border-color: rgba(255, 59, 48, 0.5);
+}
+
+.reset-btn:active {
+    transform: scale(0.98);
+}
+
+.colormap-hint {
+    font-size: 10px;
+    color: #666;
+    margin-top: 4px;
+    font-style: italic;
+}
+
+/* Custom Colormap Dropdown */
+.custom-dropdown {
+    position: relative;
+    width: 100%;
+}
+
+.dropdown-selected {
+    width: 100%;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: background 0.2s ease;
+}
+
+.dropdown-selected:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.dropdown-selected.open {
+    border-color: rgba(0, 212, 255, 0.5);
+}
+
+.dropdown-arrow {
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #fff;
+    transition: transform 0.2s ease;
+}
+
+.dropdown-selected.open .dropdown-arrow {
+    transform: rotate(180deg);
+}
+
+.dropdown-options {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 4px;
+    background: rgba(20, 20, 20, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    max-height: 300px;
+    overflow-y: auto;
+    z-index: 1000;
+    display: none;
+    backdrop-filter: blur(10px);
+}
+
+.dropdown-options.open {
+    display: block;
+}
+
+.dropdown-option {
+    padding: 8px 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: background 0.15s ease;
+}
+
+.dropdown-option:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.dropdown-option.selected {
+    background: rgba(0, 212, 255, 0.15);
+}
+
+.colormap-gradient {
+    width: 60px;
+    height: 16px;
+    border-radius: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    flex-shrink: 0;
+}
+
+.colormap-name {
+    flex: 1;
+    font-size: 12px;
+    color: #fff;
+}

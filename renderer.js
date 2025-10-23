@@ -1,69 +1,67 @@
+const { ipcRenderer } = require('electron');
 const { getLoopbackAudioMediaStream } = require('electron-audio-loopback');
 
-function map(x, min, max, targetMin, targetMax) {
-  return (x - min) / (max - min) * (targetMax - targetMin) + targetMin;
-}
+// ===== Utility Functions =====
+const map = (x, min, max, targetMin, targetMax) => 
+  (x - min) / (max - min) * (targetMax - targetMin) + targetMin;
 
-function clamp(x, min, max) {
-  return Math.min(Math.max(x, min), max);
-}
+const clamp = (x, min, max) => Math.min(Math.max(x, min), max);
 
-function idxWrapOver(x, length) {
-  return (x % length + length) % length;
-}
+const idxWrapOver = (x, length) => (x % length + length) % length;
 
-function hertzToFFTBin(x, y = 'round', bufferSize = 4096, sampleRate = 44100) {
+const hertzToFFTBin = (x, y = 'round', bufferSize = 4096, sampleRate = 44100) => {
   const bin = x * bufferSize / sampleRate;
-  let func = y;
-  if (!['floor','ceil','trunc'].includes(func))
-    func = 'round';
+  const func = ['floor','ceil','trunc'].includes(y) ? y : 'round';
   return Math[func](bin);
-}
+};
 
-function fftBinToHertz(x, bufferSize = 4096, sampleRate = 44100) {
-  return x * sampleRate / bufferSize;
-}
+const fftBinToHertz = (x, bufferSize = 4096, sampleRate = 44100) => 
+  x * sampleRate / bufferSize;
 
-// Consolidated ascale function with proper dbRange parameter
-function ascale(x, dbRange = 90) {
-  const db = 20 * Math.log10(Math.max(x, 1e-10)); // Prevent log(0)
+// Consolidated ascale with proper dbRange
+const ascale = (x, dbRange = 90) => {
+  const db = 20 * Math.log10(Math.max(x, 1e-10));
   return clamp(map(db, -dbRange, 0, 0, 1), 0, 1);
-}
+};
 
-// Improved low-end boost with better frequency targeting
+// ===== Audio Processing Functions =====
+
+// Improved low-end boost - optimized with pre-calculated frequency bins
 function applyLowEndBoost(complexFFT, sampleRate, fftSize, boostAmount) {
-  // More precise frequency bands
-  for (let i = 0; i < complexFFT.length; i++) {
-    const freq = fftBinToHertz(i, fftSize, sampleRate);
-    
-    if (freq < 20) continue; // Skip sub-bass noise
-    
-    let boostFactor = 1.0;
-    
-    // Sub-bass: 20-60 Hz - Moderate boost
-    if (freq >= 20 && freq < 60) {
-      const t = (freq - 20) / 40;
-      boostFactor = 1.0 + (boostAmount - 1.0) * 1.3 * (1 - t * 0.3);
-    }
-    // Bass: 60-250 Hz - Strong boost
-    else if (freq >= 60 && freq < 250) {
-      boostFactor = 1.0 + (boostAmount - 1.0) * 1.5;
-    }
-    // Low mids: 250-500 Hz - Gradual reduction
-    else if (freq >= 250 && freq < 500) {
-      const t = (freq - 250) / 250;
-      boostFactor = 1.0 + (boostAmount - 1.0) * 0.8 * (1 - t);
-    }
-    
-    complexFFT[i].magnitude *= boostFactor;
+  const freqPerBin = sampleRate / fftSize;
+  
+  // Pre-calculate bin ranges (faster than calculating frequency per iteration)
+  const bin20 = Math.ceil(20 / freqPerBin);
+  const bin60 = Math.ceil(60 / freqPerBin);
+  const bin250 = Math.ceil(250 / freqPerBin);
+  const bin500 = Math.ceil(500 / freqPerBin);
+  
+  const boostFactor = boostAmount - 1.0;
+  
+  // Sub-bass: 20-60 Hz
+  for (let i = bin20; i < bin60; i++) {
+    const t = (i - bin20) / (bin60 - bin20);
+    complexFFT[i].magnitude *= 1.0 + boostFactor * 1.3 * (1 - t * 0.3);
+  }
+  
+  // Bass: 60-250 Hz
+  const bassBoost = 1.0 + boostFactor * 1.5;
+  for (let i = bin60; i < bin250; i++) {
+    complexFFT[i].magnitude *= bassBoost;
+  }
+  
+  // Low mids: 250-500 Hz
+  for (let i = bin250; i < bin500; i++) {
+    const t = (i - bin250) / (bin500 - bin250);
+    complexFFT[i].magnitude *= 1.0 + boostFactor * 0.8 * (1 - t);
   }
   
   return complexFFT;
 }
 
-// Noise gate to reduce low-level clutter
+// Noise gate - optimized
 function applyNoiseGate(complexFFT, thresholdDB = -80) {
-  const thresholdLinear = Math.pow(10, thresholdDB / 20);
+  const thresholdLinear = 10 ** (thresholdDB / 20);
   
   for (let i = 0; i < complexFFT.length; i++) {
     if (complexFFT[i].magnitude < thresholdLinear) {
@@ -74,95 +72,126 @@ function applyNoiseGate(complexFFT, thresholdDB = -80) {
   return complexFFT;
 }
 
-// Pink noise weighting with better low-frequency handling
-function applyPinkNoiseWeighting(freq, sampleRate) {
-  if (freq < 20) return 0; // Eliminate sub-20Hz
+// Pink noise weighting - cached log2 calculations
+const LOG2_CACHE = new Map();
+function applyPinkNoiseWeighting(freq) {
+  if (freq < 20) return 0;
   
-  // Pink noise: -3dB per octave from reference
-  const referenceFreq = 1000; // 1kHz reference
-  const octaves = Math.log2(freq / referenceFreq);
-  const dbAdjustment = octaves * 3;
+  if (!LOG2_CACHE.has(freq)) {
+    const octaves = Math.log2(freq / 1000);
+    const dbAdjustment = octaves * 3;
+    LOG2_CACHE.set(freq, 10 ** (dbAdjustment / 20));
+  }
   
-  return Math.pow(10, dbAdjustment / 20);
+  return LOG2_CACHE.get(freq);
 }
 
-function fscale(x) {
-  return Math.log2(x);
-}
+// Frequency scaling
+const fscale = (x) => Math.log2(x);
 
 function logScale(x, scale = 1.0) {
   if (scale < 0.5) {
     const linearAmount = 1 - (scale * 2);
     const logAmount = scale * 2;
-    return map(x, 20, 20000, 0, 1) * linearAmount + map(fscale(x), fscale(20), fscale(20000), 0, 1) * logAmount;
-  } else {
-    return map(fscale(x), fscale(20), fscale(20000), 0, 1);
+    return map(x, 20, 20000, 0, 1) * linearAmount + 
+           map(fscale(x), fscale(20), fscale(20000), 0, 1) * logAmount;
   }
+  return map(fscale(x), fscale(20), fscale(20000), 0, 1);
 }
 
+// ===== FFT Functions (optimized) =====
+
 function calcComplexFFT(input) {
-  let fft = input.map(x => x);
-  let fft2 = input.map(x => x);
+  const fft = new Float32Array(input);
+  const fft2 = new Float32Array(input);
   transform(fft, fft2);
-  return input.map((_, i, arr) => {
-    return {
-      re: fft[i]/(arr.length/2),
-      im: fft2[i]/(arr.length/2),
-      magnitude: Math.hypot(fft[i], fft2[i])/(arr.length/2),
-      phase: Math.atan2(fft2[i], fft[i])
+  
+  const norm = input.length / 2;
+  const result = new Array(input.length);
+  
+  for (let i = 0; i < input.length; i++) {
+    const re = fft[i] / norm;
+    const im = fft2[i] / norm;
+    result[i] = {
+      re,
+      im,
+      magnitude: Math.hypot(re, im),
+      phase: Math.atan2(im, re)
     };
-  });
+  }
+  
+  return result;
 }
 
 function transform(real, imag) {
   const n = real.length;
-  if (n != imag.length)
-    throw "Mismatched lengths";
-  if (n <= 0)
-    return;
-  else if ((2 ** Math.trunc(Math.log2(n))) === n)
+  if (n != imag.length) throw "Mismatched lengths";
+  if (n <= 0) return;
+  
+  if ((2 ** Math.trunc(Math.log2(n))) === n) {
     transformRadix2(real, imag);
-  else
+  } else {
     transformBluestein(real, imag);
+  }
+}
+
+// Pre-allocate trig tables for common FFT sizes
+const TRIG_TABLES = new Map();
+
+function getTrigTables(n) {
+  if (!TRIG_TABLES.has(n)) {
+    const halfN = n / 2;
+    const cosTable = new Float32Array(halfN);
+    const sinTable = new Float32Array(halfN);
+    const angle = 2 * Math.PI / n;
+    
+    for (let i = 0; i < halfN; i++) {
+      cosTable[i] = Math.cos(angle * i);
+      sinTable[i] = Math.sin(angle * i);
+    }
+    
+    TRIG_TABLES.set(n, { cosTable, sinTable });
+  }
+  
+  return TRIG_TABLES.get(n);
 }
 
 function transformRadix2(real, imag) {
   const n = real.length;
-  if (n != imag.length)
-    throw "Mismatched lengths";
-  if (n <= 1)
-    return;
+  if (n != imag.length) throw "Mismatched lengths";
+  if (n <= 1) return;
+  
   const logN = Math.log2(n);
-  if ((2 ** Math.trunc(logN)) !== n)
-    throw "Length is not a power of 2";
+  if ((2 ** Math.trunc(logN)) !== n) throw "Length is not a power of 2";
   
-  let cosTable = new Array(n / 2);
-  let sinTable = new Array(n / 2);
-  for (let i = 0; i < n / 2; i++) {
-    cosTable[i] = Math.cos(2 * Math.PI * i / n);
-    sinTable[i] = Math.sin(2 * Math.PI * i / n);
-  }
+  const { cosTable, sinTable } = getTrigTables(n);
   
+  // Bit reversal
   for (let i = 0; i < n; i++) {
-    let j = reverseBits(i, logN);
+    let j = 0;
+    for (let k = 0, x = i; k < logN; k++, x >>>= 1) {
+      j = (j << 1) | (x & 1);
+    }
+    
     if (j > i) {
-      let temp = real[i];
-      real[i] = real[j];
-      real[j] = temp;
-      temp = imag[i];
-      imag[i] = imag[j];
-      imag[j] = temp;
+      [real[i], real[j]] = [real[j], real[i]];
+      [imag[i], imag[j]] = [imag[j], imag[i]];
     }
   }
   
+  // FFT
   for (let size = 2; size <= n; size *= 2) {
-    let halfsize = size / 2;
-    let tablestep = n / size;
+    const halfsize = size / 2;
+    const tablestep = n / size;
+    
     for (let i = 0; i < n; i += size) {
       for (let j = i, k = 0; j < i + halfsize; j++, k += tablestep) {
         const l = j + halfsize;
-        const tpre = real[l] * cosTable[k] + imag[l] * sinTable[k];
-        const tpim = -real[l] * sinTable[k] + imag[l] * cosTable[k];
+        const cos = cosTable[k];
+        const sin = sinTable[k];
+        const tpre = real[l] * cos + imag[l] * sin;
+        const tpim = -real[l] * sin + imag[l] * cos;
+        
         real[l] = real[j] - tpre;
         imag[l] = imag[j] - tpim;
         real[j] += tpre;
@@ -170,78 +199,80 @@ function transformRadix2(real, imag) {
       }
     }
   }
-
-  function reverseBits(x, bits) {
-    let y = 0;
-    for (let i = 0; i < bits; i++) {
-      y = (y << 1) | (x & 1);
-      x >>>= 1;
-    }
-    return y;
-  }
 }
 
 function transformBluestein(real, imag) {
   const n = real.length;
-  if (n != imag.length)
-    throw "Mismatched lengths";
-  const m = 2 ** Math.trunc(Math.log2(n*2)+1);
+  if (n != imag.length) throw "Mismatched lengths";
   
-  let cosTable = new Array(n);
-  let sinTable = new Array(n);
+  const m = 2 ** Math.trunc(Math.log2(n * 2) + 1);
+  
+  const cosTable = new Float32Array(n);
+  const sinTable = new Float32Array(n);
+  const piOverN = Math.PI / n;
+  
   for (let i = 0; i < n; i++) {
-    let j = i * i % (n * 2);
-    cosTable[i] = Math.cos(Math.PI * j / n);
-    sinTable[i] = Math.sin(Math.PI * j / n);
+    const j = (i * i) % (n * 2);
+    const angle = piOverN * j;
+    cosTable[i] = Math.cos(angle);
+    sinTable[i] = Math.sin(angle);
   }
   
-  let areal = newArrayOfZeros(m);
-  let aimag = newArrayOfZeros(m);
+  const areal = new Float32Array(m);
+  const aimag = new Float32Array(m);
+  
   for (let i = 0; i < n; i++) {
-    areal[i] = real[i] * cosTable[i] + imag[i] * sinTable[i];
-    aimag[i] = -real[i] * sinTable[i] + imag[i] * cosTable[i];
+    const cos = cosTable[i];
+    const sin = sinTable[i];
+    areal[i] = real[i] * cos + imag[i] * sin;
+    aimag[i] = -real[i] * sin + imag[i] * cos;
   }
   
-  let breal = newArrayOfZeros(m);
-  let bimag = newArrayOfZeros(m);
+  const breal = new Float32Array(m);
+  const bimag = new Float32Array(m);
   breal[0] = cosTable[0];
   bimag[0] = sinTable[0];
+  
   for (let i = 1; i < n; i++) {
     breal[i] = breal[m - i] = cosTable[i];
     bimag[i] = bimag[m - i] = sinTable[i];
   }
   
-  let creal = new Array(m);
-  let cimag = new Array(m);
+  const creal = new Float32Array(m);
+  const cimag = new Float32Array(m);
   convolveComplex(areal, aimag, breal, bimag, creal, cimag);
   
   for (let i = 0; i < n; i++) {
-    real[i] = creal[i] * cosTable[i] + cimag[i] * sinTable[i];
-    imag[i] = -creal[i] * sinTable[i] + cimag[i] * cosTable[i];
+    const cos = cosTable[i];
+    const sin = sinTable[i];
+    real[i] = creal[i] * cos + cimag[i] * sin;
+    imag[i] = -creal[i] * sin + cimag[i] * cos;
   }
 }
 
 function convolveComplex(xreal, ximag, yreal, yimag, outreal, outimag) {
   const n = xreal.length;
-  xreal = xreal.slice();
-  ximag = ximag.slice();
-  yreal = yreal.slice();
-  yimag = yimag.slice();
   
-  transform(xreal, ximag);
-  transform(yreal, yimag);
+  // Create copies
+  const xr = new Float32Array(xreal);
+  const xi = new Float32Array(ximag);
+  const yr = new Float32Array(yreal);
+  const yi = new Float32Array(yimag);
+  
+  transform(xr, xi);
+  transform(yr, yi);
   
   for (let i = 0; i < n; i++) {
-    const temp = xreal[i] * yreal[i] - ximag[i] * yimag[i];
-    ximag[i] = ximag[i] * yreal[i] + xreal[i] * yimag[i];
-    xreal[i] = temp;
+    const temp = xr[i] * yr[i] - xi[i] * yi[i];
+    xi[i] = xi[i] * yr[i] + xr[i] * yi[i];
+    xr[i] = temp;
   }
   
-  inverseTransform(xreal, ximag);
+  inverseTransform(xr, xi);
   
   for (let i = 0; i < n; i++) {
-    outreal[i] = xreal[i] / n;
-    outimag[i] = ximag[i] / n;
+    outreal[i] = xr[i] / n;
+    outimag[i] = xi[i] / n;
   }
 }
 
@@ -249,28 +280,103 @@ function inverseTransform(real, imag) {
   transform(imag, real);
 }
 
-function newArrayOfZeros(n) {
-  let result = new Array(n).fill(0);
-  return result;
+// Pre-calculated window function
+const WINDOW_CACHE = new Map();
+
+function getWindow(size) {
+  if (!WINDOW_CACHE.has(size)) {
+    const window = new Float32Array(size);
+    for (let i = 0; i < size; i++) {
+      const x = map(i, 0, size - 1, -1, 1);
+      const cos = Math.cos(x * Math.PI / 2);
+      window[i] = cos * cos;
+    }
+    WINDOW_CACHE.set(size, window);
+  }
+  return WINDOW_CACHE.get(size);
 }
 
-function applyWindow(x) {
-  return Math.cos(x*Math.PI/2) ** 2;
+function generateSpectrum(data, deltaWindow, gain, naturalWeighting, sampleRate, fftSize, lowEndBoost, noiseGateDB) {
+  const window = getWindow(data.length);
+  const dataArray = new Float32Array(data.length);
+  let norm = 0;
+  
+  if (deltaWindow) {
+    // Delta window mode
+    for (let i = 0; i < data.length; i++) {
+      const x1 = map(i - 0.5, 0, data.length - 1, -1, 1);
+      const x2 = map(i + 0.5, 0, data.length - 1, -1, 1);
+      const cos1 = Math.cos(x1 * Math.PI / 2);
+      const cos2 = Math.cos(x2 * Math.PI / 2);
+      const w1 = cos1 * cos1;
+      const w2 = cos2 * cos2;
+      const sample = isFinite(data[i]) ? data[i] * gain : 0;
+      dataArray[i] = sample * (w1 - w2);
+      norm += window[i];
+    }
+  } else {
+    // Standard window mode
+    for (let i = 0; i < data.length; i++) {
+      const sample = isFinite(data[i]) ? data[i] * gain : 0;
+      dataArray[i] = sample * window[i];
+      norm += window[i];
+    }
+  }
+  
+  // Normalize and calculate FFT
+  const normFactor = norm > 0 ? (data.length / (norm * Math.SQRT2)) : 0;
+  for (let i = 0; i < dataArray.length; i++) {
+    dataArray[i] *= normFactor;
+  }
+  
+  let complexFFT = calcComplexFFT(dataArray);
+  
+  // Apply natural weighting
+  if (naturalWeighting) {
+    const freqPerBin = sampleRate / fftSize;
+    for (let i = 0; i < complexFFT.length; i++) {
+      const freq = i * freqPerBin;
+      complexFFT[i].magnitude *= applyPinkNoiseWeighting(freq);
+    }
+  }
+  
+  // Apply noise gate
+  if (noiseGateDB > -120) {
+    complexFFT = applyNoiseGate(complexFFT, noiseGateDB);
+  }
+  
+  // Apply low-end boost
+  if (lowEndBoost > 1.0) {
+    complexFFT = applyLowEndBoost(complexFFT, sampleRate, fftSize, lowEndBoost);
+  }
+  
+  return complexFFT;
 }
 
-function generateSpectrumBarData(size = 1920, length = 4096, sampleRate = 48000, frequencyScale = 1.0) {
-  const min = 20,
-    max = 20000,
-    isFlipped = min > max,
-    minIdx = hertzToFFTBin(min, isFlipped ? 'ceil' : 'floor', length, sampleRate),
-    maxIdx = hertzToFFTBin(max, isFlipped ? 'floor' : 'ceil', length, sampleRate);
+// ===== Spectrum Generation Functions =====
 
+// Cache spectrum bar data
+const SPECTRUM_BAR_CACHE = new Map();
+
+function generateSpectrumBarData(size, length, sampleRate, frequencyScale) {
+  const key = `${size}_${length}_${sampleRate}_${frequencyScale}`;
+  
+  if (SPECTRUM_BAR_CACHE.has(key)) {
+    return SPECTRUM_BAR_CACHE.get(key);
+  }
+  
+  const min = 20;
+  const max = 20000;
+  const minIdx = hertzToFFTBin(min, 'floor', length, sampleRate);
+  const maxIdx = hertzToFFTBin(max, 'ceil', length, sampleRate);
+  
   const spectrogramBars = [];
-  for (let i = Math.min(minIdx, maxIdx); i <= Math.max(minIdx, maxIdx); i++) {
-    const lowerBound = logScale(fftBinToHertz(i-0.5, length, sampleRate), frequencyScale),
-      higherBound = logScale(fftBinToHertz(i+0.5, length, sampleRate), frequencyScale),
-      lowerVisible = clamp(Math.round(lowerBound * size), 0, size),
-      higherVisible = clamp(Math.round(higherBound * size), 0, size);
+  
+  for (let i = minIdx; i <= maxIdx; i++) {
+    const lowerBound = logScale(fftBinToHertz(i - 0.5, length, sampleRate), frequencyScale);
+    const higherBound = logScale(fftBinToHertz(i + 0.5, length, sampleRate), frequencyScale);
+    const lowerVisible = clamp(Math.round(lowerBound * size), 0, size);
+    const higherVisible = clamp(Math.round(higherBound * size), 0, size);
     
     if (lowerVisible !== higherVisible) {
       spectrogramBars.push({
@@ -279,96 +385,98 @@ function generateSpectrumBarData(size = 1920, length = 4096, sampleRate = 48000,
         start: lowerVisible,
         end: higherVisible
       });
-    }
-    else if (spectrogramBars.length > 0) {
-      const lastBin = spectrogramBars[spectrogramBars.length-1];
+    } else if (spectrogramBars.length > 0) {
+      const lastBin = spectrogramBars[spectrogramBars.length - 1];
       lastBin.lo = Math.min(lastBin.lo, i);
       lastBin.hi = Math.max(lastBin.hi, i);
     }
   }
+  
+  SPECTRUM_BAR_CACHE.set(key, spectrogramBars);
   return spectrogramBars;
 }
 
 function calcReassignedFreqs(data, auxData, bufferSize, sampleRate) {
-  if (data.length !== auxData.length)
-    throw 'Mismatched lengths';
-  const freqs = new Array(data.length);
+  const freqs = new Float32Array(data.length);
+  const correction = sampleRate / (2 * Math.PI);
+  
   for (let i = 0; i < freqs.length; i++) {
-    const denom = data[i].re ** 2 + data[i].im ** 2,
-      correction = denom > 0 ? -(data[i].re * auxData[i].im - auxData[i].re * data[i].im) / denom : 0;
-    freqs[i] = fftBinToHertz(i, bufferSize, sampleRate) - correction * ((sampleRate/2)/Math.PI);
+    const denom = data[i].re * data[i].re + data[i].im * data[i].im;
+    const corr = denom > 0 ? 
+      -(data[i].re * auxData[i].im - auxData[i].re * data[i].im) / denom : 0;
+    freqs[i] = fftBinToHertz(i, bufferSize, sampleRate) - corr * correction;
   }
+  
   return freqs;
 }
 
-function calcReassignedSpectrum(fft, freqs, bands = 1920, frequencyScale = 1.0) {
-  const buckets = new Array(bands).fill(0);
+function calcReassignedSpectrum(fft, freqs, bands, frequencyScale) {
+  const buckets = new Float32Array(bands);
+  const bandsFactor = bands;
+  
   for (let i = 0; i < fft.length; i++) {
-    const x = map(logScale(freqs[i], frequencyScale), 0, 1, 0, buckets.length),
-      posX = Math.round(x);
-    if (posX >= 0 && posX < buckets.length)
-      buckets[posX] = isFinite(buckets[posX]) ? Math.max(buckets[posX], isFinite(fft[i]) ? fft[i] : 0) : fft[i];
+    if (!isFinite(fft[i])) continue;
+    
+    const x = logScale(freqs[i], frequencyScale);
+    const posX = Math.round(x * bandsFactor);
+    
+    if (posX >= 0 && posX < bands) {
+      buckets[posX] = Math.max(buckets[posX], fft[i]);
+    }
   }
+  
   return buckets;
 }
 
 function renderOscilloscope(data, oscilloscopeIdx) {
-  const dataset = [];
-  for (let i = 0; i < data.length; i++) {
-    dataset[i] = data[idxWrapOver(i+oscilloscopeIdx-data.length, data.length)];
+  const dataset = new Float32Array(data.length);
+  const len = data.length;
+  
+  for (let i = 0; i < len; i++) {
+    dataset[i] = data[idxWrapOver(i + oscilloscopeIdx - len, len)];
   }
+  
   return dataset;
 }
 
-// Frequency to note conversion
+// ===== Note/Frequency Functions =====
+
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const C0_FREQ = 440 * 2 ** -4.75;
+
 function frequencyToNote(freq) {
-  if (freq < 16.35) return null; // Below C0
+  if (freq < 16.35) return null;
   
-  const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-  const a4 = 440;
-  const c0 = a4 * Math.pow(2, -4.75); // C0 frequency
-  
-  const halfSteps = 12 * Math.log2(freq / c0);
+  const halfSteps = 12 * Math.log2(freq / C0_FREQ);
   const octave = Math.floor(halfSteps / 12);
   const noteIndex = Math.round(halfSteps % 12);
-  
-  const noteName = noteNames[noteIndex % 12];
   const cents = Math.round((halfSteps % 1) * 100);
   
   return {
-    note: `${noteName}${octave}`,
+    note: `${NOTE_NAMES[noteIndex % 12]}${octave}`,
     freq: freq.toFixed(2),
     cents: cents !== 0 ? cents : null
   };
 }
 
-// Convert Y position to frequency based on current settings
 function yPositionToFrequency(yPos, canvasHeight, frequencyScale) {
-  // Invert Y (bottom = low freq, top = high freq)
   const normalizedY = 1 - (yPos / canvasHeight);
-  
-  // Convert from normalized position back to frequency
-  // Reverses the logScale function
   const minFreq = 20;
   const maxFreq = 20000;
   
   if (frequencyScale < 0.5) {
-    // Handle linear/log blend
     const linearAmount = 1 - (frequencyScale * 2);
     const logAmount = frequencyScale * 2;
-    
-    // Approximate inverse (this is simplified but works well enough)
     const linearFreq = minFreq + normalizedY * (maxFreq - minFreq);
-    const logFreq = minFreq * Math.pow(maxFreq / minFreq, normalizedY);
-    
+    const logFreq = minFreq * (maxFreq / minFreq) ** normalizedY;
     return linearFreq * linearAmount + logFreq * logAmount;
-  } else {
-    // Pure logarithmic
-    return minFreq * Math.pow(maxFreq / minFreq, normalizedY);
   }
+  
+  return minFreq * (maxFreq / minFreq) ** normalizedY;
 }
 
-// Automatic Gain Control
+// ===== AGC Functions =====
+
 function calculateRMS(data) {
   let sum = 0;
   for (let i = 0; i < data.length; i++) {
@@ -380,154 +488,126 @@ function calculateRMS(data) {
 function calculatePeakLevel(data) {
   let peak = 0;
   for (let i = 0; i < data.length; i++) {
-    peak = Math.max(peak, Math.abs(data[i]));
+    const abs = Math.abs(data[i]);
+    if (abs > peak) peak = abs;
   }
   return peak;
 }
 
-// Reordered processing pipeline for better results
-function generateSpectrum(data, deltaWindow, gain = 1.0, naturalWeighting = true, sampleRate = 44100, fftSize = 4096, lowEndBoost = 1.0, noiseGateDB = -80) {
-  const dataArray = [];
-  let norm = 0;
-  
-  // Apply window function
-  for (let i = 0; i < data.length; i++) {
-    const x = map(i, 0, data.length-1, -1, 1),
-      x1 = map(i-0.5, 0, data.length-1, -1, 1),
-      x2 = map(i+0.5, 0, data.length-1, -1, 1),
-      w = applyWindow(x),
-      w1 = applyWindow(x1),
-      w2 = applyWindow(x2),
-      sample = isFinite(data[i]) ? data[i] * gain : 0,
-      amp = sample*(deltaWindow ? w1-w2 : w);
-    dataArray[i] = amp;
-    norm += w;
-  }
-  
-  // Calculate FFT
-  let complexFFT = calcComplexFFT(dataArray.map(x => x/norm*data.length/Math.SQRT2));
-  
-  // Apply natural weighting FIRST (before boost)
-  if (naturalWeighting) {
-    for (let i = 0; i < complexFFT.length; i++) {
-      const freq = fftBinToHertz(i, fftSize, sampleRate);
-      const weight = applyPinkNoiseWeighting(freq, sampleRate);
-      complexFFT[i].magnitude *= weight;
-    }
-  }
-  
-  // Apply noise gate to reduce clutter
-  if (noiseGateDB > -120) {
-    complexFFT = applyNoiseGate(complexFFT, noiseGateDB);
-  }
-  
-  // Apply low-end boost AFTER weighting and gating
-  if (lowEndBoost > 1.0) {
-    complexFFT = applyLowEndBoost(complexFFT, sampleRate, fftSize, lowEndBoost);
-  }
-  
-  return complexFFT;
-}
+// ===== Colormap System =====
 
-// Colormap functions
-function getColormapColor(value, colormap) {
+const COLORMAPS = {
+  aging: [[0.00, 0, 30, 70], [0.50, 130, 120, 90], [1.00, 255, 235, 160]],
+  arctic: [[0.00, 0, 0, 0], [0.00, 0, 0, 50], [0.50, 100, 150, 200], [1.00, 200, 240, 255]],
+  ayeye: [[0.00, 5, 0, 30], [0.33, 80, 0, 150], [0.66, 150, 50, 255], [1.00, 200, 200, 255]],
+  bubblegum: [[0.00, 0, 0, 0], [0.00, 30, 0, 30], [0.50, 200, 100, 180], [1.00, 255, 180, 240]],
+  chroma: [[0.00, 30, 0, 60], [0.25, 150, 0, 200], [0.50, 255, 100, 150], [0.75, 255, 200, 0], [1.00, 150, 255, 100]],
+  cold: [[0.00, 0, 0, 30], [0.25, 50, 80, 150], [0.50, 100, 180, 230], [0.75, 150, 220, 255], [1.00, 200, 240, 255]],
+  craft: [[0.00, 0, 0, 0], [0.50, 100, 0, 150], [1.00, 220, 150, 255]],
+  dusk: [[0.00, 10, 10, 30], [0.50, 150, 80, 100], [1.00, 255, 180, 150]],
+  ember: [[0.00, 20, 0, 0], [0.50, 200, 60, 0], [1.00, 255, 180, 100]],
+  fall: [[0.00, 30, 0, 0], [0.33, 180, 100, 0], [0.66, 255, 180, 50], [1.00, 255, 220, 180]],
+  flamangos: [[0.00, 30, 0, 20], [0.50, 255, 120, 180], [1.00, 255, 200, 220]],
+  frogger: [[0.00, 0, 20, 10], [0.33, 0, 100, 80], [0.66, 100, 200, 100], [1.00, 200, 255, 150]],
+  gemini: [[0.00, 20, 0, 40], [0.33, 120, 50, 200], [0.66, 180, 150, 255], [1.00, 230, 220, 255]],
+  gothic: [[0.00, 20, 0, 30], [0.50, 120, 50, 150], [1.00, 200, 150, 230]],
+  granny: [[0.00, 0, 0, 0], [0.50, 100, 180, 50], [1.00, 200, 255, 150]],
+  greyscale: [[0.00, 0, 0, 0], [1.00, 200, 200, 200]],
+  inferno: [[0.00, 0, 0, 0], [0.25, 80, 0, 80], [0.50, 200, 50, 50], [0.75, 255, 150, 0], [1.00, 255, 255, 200]],
+  jurassic: [[0.00, 0, 0, 0], [0.50, 180, 60, 0], [1.00, 255, 200, 100]],
+  light: [[0.00, 30, 20, 40], [0.50, 180, 150, 200], [1.00, 240, 220, 255]],
+  magma: [[0.00, 0, 0, 10], [0.25, 80, 20, 80], [0.50, 200, 70, 100], [0.75, 255, 150, 120], [1.00, 255, 240, 200]],
+  neon: [[0.00, 0, 0, 0], [0.33, 255, 0, 150], [0.66, 0, 255, 200], [1.00, 150, 255, 255]],
+  original: [[0.00, 30, 30, 120], [0.25, 50, 150, 255], [0.50, 100, 255, 150], [0.75, 255, 230, 50], [1.00, 200, 50, 0]],
+  pepper: [[0.00, 20, 0, 0], [0.50, 150, 100, 50], [1.00, 255, 220, 150]],
+  plasma: [[0.00, 10, 0, 80], [0.25, 150, 0, 150], [0.50, 255, 80, 100], [0.75, 255, 180, 50], [1.00, 255, 255, 100]],
+  sepia: [[0.00, 20, 15, 10], [0.50, 150, 120, 90], [1.00, 240, 220, 200]],
+  sharp: [[0.00, 0, 0, 50], [0.33, 100, 0, 200], [0.66, 200, 100, 255], [1.00, 255, 230, 255]],
+  slimer: [[0.00, 10, 20, 10], [0.50, 150, 200, 150], [1.00, 240, 255, 240]],
+  smooth: [[0.00, 0, 0, 20], [0.33, 100, 50, 100], [0.66, 255, 120, 100], [1.00, 255, 230, 180]],
+  soft: [[0.00, 0, 0, 0], [0.25, 60, 50, 100], [0.50, 150, 120, 140], [0.75, 230, 180, 160], [1.00, 255, 255, 240]],
+  space: [[0.00, 0, 0, 0], [0.50, 50, 40, 80], [1.00, 255, 200, 100]],
+  sunrise: [[0.00, 0, 20, 40], [0.33, 50, 100, 180], [0.66, 255, 150, 120], [1.00, 255, 200, 200]],
+  torch: [[0.00, 20, 0, 0], [0.50, 255, 100, 0], [1.00, 255, 240, 180]],
+  toxic: [[0.00, 0, 0, 0], [0.50, 150, 255, 0], [1.00, 230, 255, 150]],
+  tropical: [[0.00, 0, 30, 30], [0.33, 255, 100, 150], [0.66, 255, 200, 100], [1.00, 255, 255, 200]],
+  twentyfive: [[0.00, 70, 15, 90], [0.25, 60, 90, 140], [0.50, 40, 160, 140], [0.75, 140, 210, 100], [1.00, 255, 230, 60]]
+};
+
+function getColormapColor(value, colormapName) {
   value = clamp(value, 0, 1);
   
-  switch(colormap) {
-    case 'flame':
-      if (value < 0.25) {
-        const t = value / 0.25;
-        return `rgb(${Math.round(100 * t)}, 0, ${Math.round(150 * t)})`;
-      } else if (value < 0.5) {
-        const t = (value - 0.25) / 0.25;
-        return `rgb(${Math.round(100 + 155 * t)}, 0, ${Math.round(150 - 100 * t)})`;
-      } else if (value < 0.75) {
-        const t = (value - 0.5) / 0.25;
-        return `rgb(255, ${Math.round(100 * t)}, 0)`;
-      } else {
-        const t = (value - 0.75) / 0.25;
-        return `rgb(255, ${Math.round(100 + 155 * t)}, 0)`;
-      }
-    
-    case 'cool':
-      if (value < 0.2) {
-        const t = value / 0.2;
-        return `rgb(0, 0, ${Math.round(255 * t)})`;
-      } else if (value < 0.4) {
-        const t = (value - 0.2) / 0.2;
-        return `rgb(0, ${Math.round(255 * t)}, 255)`;
-      } else if (value < 0.6) {
-        const t = (value - 0.4) / 0.2;
-        return `rgb(0, 255, ${Math.round(255 - 255 * t)})`;
-      } else if (value < 0.8) {
-        const t = (value - 0.6) / 0.2;
-        return `rgb(${Math.round(255 * t)}, 255, 0)`;
-      } else {
-        const t = (value - 0.8) / 0.2;
-        return `rgb(255, ${Math.round(255 - 100 * t)}, 0)`;
-      }
-    
-    case 'twilight':
-      if (value < 0.33) {
-        const t = value / 0.33;
-        return `rgb(${Math.round(100 + 50 * t)}, 0, ${Math.round(200 - 100 * t)})`;
-      } else if (value < 0.66) {
-        const t = (value - 0.33) / 0.33;
-        return `rgb(${Math.round(150 - 50 * t)}, ${Math.round(100 * t)}, ${Math.round(100 + 155 * t)})`;
-      } else {
-        const t = (value - 0.66) / 0.34;
-        return `rgb(${Math.round(100 + 155 * t)}, ${Math.round(100 - 50 * t)}, 255)`;
-      }
-    
-    case 'hot':
-      if (value < 0.33) {
-        const t = value / 0.33;
-        return `rgb(${Math.round(255 * t)}, 0, 0)`;
-      } else if (value < 0.66) {
-        const t = (value - 0.33) / 0.33;
-        return `rgb(255, ${Math.round(255 * t)}, 0)`;
-      } else {
-        const t = (value - 0.66) / 0.34;
-        return `rgb(255, 255, ${Math.round(255 * t)})`;
-      }
-    
-    default:
-      const gray = Math.round(255 * value);
-      return `rgb(${gray}, ${gray}, ${gray})`;
+  const colormap = COLORMAPS[colormapName] || COLORMAPS.grayscale;
+  
+  // Find interpolation range
+  let i = 0;
+  while (i < colormap.length - 1 && value > colormap[i + 1][0]) {
+    i++;
   }
+  
+  if (i === colormap.length - 1) {
+    const [, r, g, b] = colormap[i];
+    return `rgb(${r},${g},${b})`;
+  }
+  
+  // Interpolate
+  const [pos1, r1, g1, b1] = colormap[i];
+  const [pos2, r2, g2, b2] = colormap[i + 1];
+  const t = (value - pos1) / (pos2 - pos1);
+  
+  const r = (r1 + (r2 - r1) * t) | 0;
+  const g = (g1 + (g2 - g1) * t) | 0;
+  const b = (b1 + (b2 - b1) * t) | 0;
+  
+  return `rgb(${r},${g},${b})`;
 }
 
+// ===== Spectrogram Rendering =====
+
 function printSpectrogram(auxCtx, auxCanvas, data, linearBinData, colormap, dbRange, staticSpectrogramIdx, isStatic) {
-  const length = auxCanvas.height,
-    isLinearBins = linearBinData !== undefined,
-    actualLength = isLinearBins ? linearBinData.length : data.length;
+  const length = auxCanvas.height;
+  const isLinearBins = linearBinData !== undefined;
+  const actualLength = isLinearBins ? linearBinData.length : data.length;
   
   for (let i = 0; i < actualLength; i++) {
     let mag = 0;
+    
     if (isLinearBins) {
-      for (let idx = linearBinData[i].lo; idx <= linearBinData[i].hi; idx++) {
+      const bin = linearBinData[i];
+      for (let idx = bin.lo; idx <= bin.hi; idx++) {
         const binIdx = idxWrapOver(idx, data.length);
         mag = Math.max(mag, data[binIdx]);
       }
+      
+      const start = clamp(bin.start, 0, auxCanvas.height);
+      const end = clamp(bin.end, 0, auxCanvas.height);
+      const delta = end - start;
+      const amp = ascale(mag, dbRange);
+      
+      auxCtx.fillStyle = getColormapColor(isFinite(amp) ? amp : 0, colormap);
+      auxCtx.fillRect(isStatic ? staticSpectrogramIdx + 1 : auxCanvas.width, auxCanvas.height - start, -1, -delta);
+    } else {
+      const start = ((i / data.length * length) | 0);
+      const end = (((i + 1) / data.length * length) | 0);
+      const delta = end - start;
+      const amp = ascale(data[i], dbRange);
+      
+      auxCtx.fillStyle = getColormapColor(isFinite(amp) ? amp : 0, colormap);
+      auxCtx.fillRect(isStatic ? staticSpectrogramIdx + 1 : auxCanvas.width, auxCanvas.height - start, -1, -delta);
     }
-    
-    const start = isLinearBins ? isNaN(linearBinData[i].start) ? 0 : clamp(linearBinData[i].start, 0, auxCanvas.height) : Math.trunc(i/data.length*length),
-      end = isLinearBins ? isNaN(linearBinData[i].end) ? 0 : clamp(linearBinData[i].end, 0, auxCanvas.height) : Math.trunc((i+1)/data.length*length),
-      delta = end-start,
-      amp = ascale(isLinearBins ? mag : data[i], dbRange);
-    
-    auxCtx.fillStyle = getColormapColor(isFinite(amp) ? amp : 0, colormap);
-    auxCtx.fillRect(isStatic ? staticSpectrogramIdx+1 : auxCanvas.width, auxCanvas.height-start, -1, -delta);
   }
   
-  if (auxCanvas.width > 0 && auxCanvas.height > 0)
+  if (auxCanvas.width > 0 && auxCanvas.height > 0) {
     auxCtx.drawImage(auxCanvas, -1, 0);
+  }
 }
+
+// ===== Main AudioSpectrogram Class =====
 
 class AudioSpectrogram {
   constructor() {
     this.canvas = document.getElementById('canvas');
-    this.ctx = this.canvas.getContext('2d');
+    this.ctx = this.canvas.getContext('2d', { alpha: false });
     this.ctx.imageSmoothingEnabled = false;
     this.statusEl = document.getElementById('status');
     this.settingsPanel = document.getElementById('settingsPanel');
@@ -537,26 +617,28 @@ class AudioSpectrogram {
     this.analyser = this.audioCtx.createAnalyser();
     this.analyser.fftSize = 8192;
 
-    // Default settings with noise gate
     const defaultSettings = {
       fftSize: 4096,
       hopSize: 8192,
       useReassignment: true,
-      colormap: 'flame',
-      dbRange: 120,
-      gain: 4.6,
+      colormap: 'inferno',
+      dbRange: 50,
+      gain: 10.0,
       naturalWeighting: true,
       frequencyScale: 1.0,
-      lowEndBoost: 5.0,
-      smoothing: 0.5,
-      noiseGate: -80,
+      lowEndBoost: 10.0,
+      smoothing: 0.35,
+      noiseGate: -60,
       alwaysOnTop: true,
       enableAGC: true,
-      agcStrength: 0.7,
+      agcStrength: 1.0,
       sampleRate: this.audioCtx.sampleRate
     };
 
     this.settings = { ...defaultSettings };
+
+    this.isPaused = false;
+    this.previewColormap = null;
 
     this.state = {
       isRunning: false,
@@ -567,13 +649,13 @@ class AudioSpectrogram {
       sampleCounter: 0,
       staticSpectrogramIdx: 0,
       isReassigned: false,
-      targetRMS: 0.1,           // Target RMS level
-      currentGain: 1.0,         // Current AGC gain multiplier
-      gainSmoothingFactor: 0.95 // Smoothing for gain changes
+      targetRMS: 0.1,
+      currentGain: 1.0,
+      gainSmoothingFactor: 0.95
     };
 
     this.auxCanvas = new OffscreenCanvas(this.canvas.width, this.canvas.height);
-    this.auxCtx = this.auxCanvas.getContext('2d');
+    this.auxCtx = this.auxCanvas.getContext('2d', { alpha: false });
     this.auxCtx.imageSmoothingEnabled = false;
 
     this.setupUI();
@@ -605,21 +687,22 @@ class AudioSpectrogram {
     updateElement('lowEnd', this.settings.lowEndBoost, 'lowEndValue', v => v.toFixed(1) + 'x');
     updateElement('smoothing', this.settings.smoothing, 'smoothingValue', v => v.toFixed(2));
     updateElement('noiseGate', this.settings.noiseGate, 'noiseGateValue', v => v + ' dB');
-
-    const reassignedCheck = document.getElementById('reassignedCheck');
-    const naturalCheck = document.getElementById('naturalCheck');
-    const alwaysOnTopCheck = document.getElementById('alwaysOnTopCheck');
-    const agcCheck = document.getElementById('agcCheck');
-    if (reassignedCheck) reassignedCheck.checked = this.settings.useReassignment;
-    if (naturalCheck) naturalCheck.checked = this.settings.naturalWeighting;
-    if (alwaysOnTopCheck) alwaysOnTopCheck.checked = this.settings.alwaysOnTop;
-    if (agcCheck) agcCheck.checked = this.settings.enableAGC;
-
     updateElement('agcStrength', this.settings.agcStrength, 'agcStrengthValue', v => v.toFixed(2));
+
+    const checkboxes = [
+      ['reassignedCheck', 'useReassignment'],
+      ['naturalCheck', 'naturalWeighting'],
+      ['alwaysOnTopCheck', 'alwaysOnTop'],
+      ['agcCheck', 'enableAGC']
+    ];
+    
+    checkboxes.forEach(([id, setting]) => {
+      const el = document.getElementById(id);
+      if (el) el.checked = this.settings[setting];
+    });
   }
 
   async loadSettings(defaultSettings) {
-    const { ipcRenderer } = require('electron');
     try {
       const savedSettings = await ipcRenderer.invoke('load-settings');
       if (savedSettings) {
@@ -635,7 +718,6 @@ class AudioSpectrogram {
   }
 
   async saveSettings() {
-    const { ipcRenderer } = require('electron');
     try {
       const settingsToSave = {
         fftSize: this.settings.fftSize,
@@ -648,13 +730,14 @@ class AudioSpectrogram {
         frequencyScale: this.settings.frequencyScale,
         lowEndBoost: this.settings.lowEndBoost,
         smoothing: this.settings.smoothing,
-        noiseGate: this.settings.noiseGate
+        noiseGate: this.settings.noiseGate,
+        alwaysOnTop: this.settings.alwaysOnTop,
+        enableAGC: this.settings.enableAGC,
+        agcStrength: this.settings.agcStrength
       };
       
       const result = await ipcRenderer.invoke('save-settings', settingsToSave);
-      if (result.success) {
-        console.log('Settings saved successfully');
-      } else {
+      if (!result.success) {
         console.error('Failed to save settings:', result.error);
       }
     } catch (err) {
@@ -665,38 +748,19 @@ class AudioSpectrogram {
   setupUI() {
     const exitBtn = document.getElementById('exitBtn');
     const settingsBtn = document.getElementById('settingsBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
     
-    if (exitBtn) {
-      exitBtn.addEventListener('click', () => {
-        window.close();
-      });
-    }
-
-    if (settingsBtn) {
-      settingsBtn.addEventListener('click', () => {
-        this.toggleSettings();
-      });
-    }
-
-    if (this.settingsPanel) {
-      this.settingsPanel.addEventListener('click', (e) => {
-        if (e.target === this.settingsPanel) {
-          this.toggleSettings();
-        }
-      });
-    }
-
+    exitBtn?.addEventListener('click', () => window.close());
+    settingsBtn?.addEventListener('click', () => this.toggleSettings());
+    pauseBtn?.addEventListener('click', () => this.togglePause());
+    
     window.addEventListener('resize', () => this.resizeCanvas());
     this.createSettingsUI();
 
-    // Setup frequency hover display
     this.freqHover = document.getElementById('freqHover');
     this.freqLine = document.getElementById('freqLine');
     this.freqLabel = document.getElementById('freqLabel');
     
-    const { ipcRenderer } = require('electron');
-    
-    // Start mouse tracking from main process
     ipcRenderer.send('start-mouse-tracking');
     
     ipcRenderer.on('mouse-position', (event, mousePos) => {
@@ -706,45 +770,130 @@ class AudioSpectrogram {
       const clientX = mousePos.x;
       const clientY = mousePos.y;
       
-      // Check if mouse is inside container
       const isInside = clientX >= 0 && clientX <= rect.width &&
-                       clientY >= 0 && clientY <= rect.height;
+                      clientY >= 0 && clientY <= rect.height;
       
-      // Check if settings panel is open
-      const settingsOpen = this.settingsPanel && this.settingsPanel.classList.contains('open');
+      const settingsOpen = this.settingsPanel?.classList.contains('open');
       
-      // Check if mouse is over button areas
       let isOverButton = false;
       const exitButton = document.getElementById('exitBtn');
       const settingsButton = document.getElementById('settingsBtn');
+      const pauseButton = document.getElementById('pauseBtn');
       
-      if (exitButton) {
-        const btnRect = exitButton.getBoundingClientRect();
-        isOverButton = isOverButton || (
-          clientX >= btnRect.left && clientX <= btnRect.right &&
-          clientY >= btnRect.top && clientY <= btnRect.bottom
-        );
-      }
-      if (settingsButton) {
-        const btnRect = settingsButton.getBoundingClientRect();
-        isOverButton = isOverButton || (
-          clientX >= btnRect.left && clientX <= btnRect.right &&
-          clientY >= btnRect.top && clientY <= btnRect.bottom
-        );
-      }
+      [exitButton, settingsButton, pauseButton].forEach(btn => {
+        if (btn) {
+          const btnRect = btn.getBoundingClientRect();
+          isOverButton = isOverButton || (
+            clientX >= btnRect.left && clientX <= btnRect.right &&
+            clientY >= btnRect.top && clientY <= btnRect.bottom
+          );
+        }
+      });
       
       if (isInside && !settingsOpen && !isOverButton) {
-        if (this.freqHover) this.freqHover.classList.add('active');
+        this.freqHover?.classList.add('active');
         this.updateFrequencyDisplay({ clientX, clientY });
       } else {
-        if (this.freqHover) this.freqHover.classList.remove('active');
+        this.freqHover?.classList.remove('active');
       }
     });
   }
 
   toggleSettings() {
-    if (this.settingsPanel) {
-      this.settingsPanel.classList.toggle('open');
+    this.settingsPanel?.classList.toggle('open');
+  }
+
+  setupColormapDropdown() {
+    const dropdownSelected = document.getElementById('colormapSelected');
+    const dropdownOptions = document.getElementById('colormapOptions');
+    
+    if (!dropdownSelected || !dropdownOptions) return;
+
+    // Toggle dropdown
+    dropdownSelected.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dropdownSelected.classList.toggle('open');
+      dropdownOptions.classList.toggle('open');
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!dropdownSelected.contains(e.target) && !dropdownOptions.contains(e.target)) {
+        dropdownSelected.classList.remove('open');
+        dropdownOptions.classList.remove('open');
+        this.previewColormap = null;
+      }
+    });
+
+    // Handle option selection and hover
+    const options = dropdownOptions.querySelectorAll('.dropdown-option');
+    options.forEach(option => {
+      const colormapValue = option.dataset.colormap;
+      
+      // Hover to preview
+      option.addEventListener('mouseenter', () => {
+        this.previewColormap = colormapValue;
+      });
+      
+      // Click to select
+      option.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.settings.colormap = colormapValue;
+        this.previewColormap = null;
+        
+        // Update selected display
+        const selectedName = dropdownSelected.querySelector('.colormap-name');
+        const selectedGradient = dropdownSelected.querySelector('.colormap-gradient');
+        if (selectedName) {
+          selectedName.textContent = colormapValue.charAt(0).toUpperCase() + colormapValue.slice(1);
+        }
+        if (selectedGradient) {
+          selectedGradient.style.background = this.generateColormapGradient(colormapValue);
+        }
+        
+        // Update value display
+        document.getElementById('colormapValue').textContent = 
+          colormapValue.charAt(0).toUpperCase() + colormapValue.slice(1);
+        
+        // Update selected state
+        options.forEach(opt => opt.classList.remove('selected'));
+        option.classList.add('selected');
+        
+        // Close dropdown
+        dropdownSelected.classList.remove('open');
+        dropdownOptions.classList.remove('open');
+        
+        this.saveSettings();
+      });
+    });
+
+    // Clear preview when leaving options area
+    dropdownOptions.addEventListener('mouseleave', () => {
+      this.previewColormap = null;
+    });
+  }
+
+  // Add method to generate CSS gradient from colormap
+  generateColormapGradient(colormapName) {
+    const colormap = COLORMAPS[colormapName];
+    if (!colormap) return 'linear-gradient(to right, #000, #fff)';
+    
+    const stops = colormap.map(([pos, r, g, b]) => {
+      return `rgb(${r},${g},${b}) ${pos * 100}%`;
+    }).join(', ');
+    
+    return `linear-gradient(to right, ${stops})`;
+  }
+
+  togglePause() {
+    this.isPaused = !this.isPaused;
+    const pauseBtn = document.getElementById('pauseBtn');
+    if (pauseBtn) {
+      if (this.isPaused) {
+        pauseBtn.classList.add('paused');
+      } else {
+        pauseBtn.classList.remove('paused');
+      }
     }
   }
 
@@ -754,16 +903,12 @@ class AudioSpectrogram {
     const rect = this.canvas.getBoundingClientRect();
     const y = e.clientY;
     
-    // Update line position
     this.freqLine.style.top = y + 'px';
     
-    // Calculate frequency from Y position using actual canvas height
-    // Use the visual height (rect.height), not the internal canvas height
     const freq = yPositionToFrequency(y, rect.height, this.settings.frequencyScale);
     const noteInfo = frequencyToNote(freq);
     
     if (noteInfo) {
-      // Format label text
       let labelText = `<span class="note">${noteInfo.note}</span> ${noteInfo.freq} Hz`;
       if (noteInfo.cents) {
         const centsSign = noteInfo.cents > 0 ? '+' : '';
@@ -771,19 +916,13 @@ class AudioSpectrogram {
       }
       this.freqLabel.innerHTML = labelText;
       
-      // Position label with padding to keep it visible
-      // Estimate label height as ~30px
       const labelHeight = 30;
       const padding = 10;
-      
       let labelY = y;
       
-      // If too close to top, move it down
       if (y < labelHeight / 2 + padding) {
         labelY = labelHeight / 2 + padding;
-      }
-      // If too close to bottom, move it up
-      else if (y > rect.height - labelHeight / 2 - padding) {
+      } else if (y > rect.height - labelHeight / 2 - padding) {
         labelY = rect.height - labelHeight / 2 - padding;
       }
       
@@ -792,6 +931,21 @@ class AudioSpectrogram {
   }
 
   createSettingsUI() {
+    // Generate colormap options HTML with gradient previews
+    const colormapOptions = Object.keys(COLORMAPS).sort().map(name => {
+      const gradient = this.generateColormapGradient(name);
+      const isSelected = this.settings.colormap === name ? 'selected' : '';
+      return `
+        <div class="dropdown-option ${isSelected}" data-colormap="${name}">
+          <div class="colormap-gradient" style="background: ${gradient}"></div>
+          <span class="colormap-name">${name.charAt(0).toUpperCase() + name.slice(1)}</span>
+        </div>
+      `;
+    }).join('');
+
+    const currentGradient = this.generateColormapGradient(this.settings.colormap);
+    const currentName = this.settings.colormap.charAt(0).toUpperCase() + this.settings.colormap.slice(1);
+
     this.settingsContent.innerHTML = `
       <div class="setting-group">
         <button id="resetSettingsBtn" class="reset-btn">Reset to Default</button>
@@ -800,15 +954,21 @@ class AudioSpectrogram {
       <div class="setting-group">
         <div class="setting-label">
           <label>Colormap</label>
-          <span class="setting-value" id="colormapValue">Flame</span>
+          <span class="setting-value" id="colormapValue">${currentName}</span>
         </div>
-        <select id="colormapSelect">
-          <option value="flame">Flame</option>
-          <option value="cool">Cool</option>
-          <option value="twilight">Twilight</option>
-          <option value="hot">Hot</option>
-          <option value="grayscale">Grayscale</option>
-        </select>
+        <div class="custom-dropdown">
+          <div class="dropdown-selected" id="colormapSelected">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div class="colormap-gradient" style="background: ${currentGradient}"></div>
+              <span class="colormap-name">${currentName}</span>
+            </div>
+            <div class="dropdown-arrow"></div>
+          </div>
+          <div class="dropdown-options" id="colormapOptions">
+            ${colormapOptions}
+          </div>
+        </div>
+        <p class="colormap-hint">Hover to preview, click to select</p>
       </div>
 
       <div class="setting-group">
@@ -853,141 +1013,154 @@ class AudioSpectrogram {
 
       <div class="setting-group">
         <div class="setting-label">
+          <label>AGC Strength</label>
+          <span class="setting-value" id="agcStrengthValue">0.70</span>
+        </div>
+        <input type="range" id="agcStrength" min="0" max="1" step="0.05" value="0.7">
+      </div>
+
+      <div class="setting-group">
+        <div class="setting-label">
           <label>Smoothing</label>
           <span class="setting-value" id="smoothingValue">0.50</span>
         </div>
         <input type="range" id="smoothing" min="0" max="0.5" step="0.05" value="0.5">
       </div>
 
-      <div class="setting-group">
-        <div class="checkbox-group">
-          <input type="checkbox" id="reassignedCheck" checked>
-          <label for="reassignedCheck">Enhanced</label>
-        </div>
-      </div>
+      <div class="button-group">
 
-      <div class="setting-group">
-        <div class="checkbox-group">
-          <input type="checkbox" id="naturalCheck" checked>
-          <label for="naturalCheck">Natural Audio</label>
+        <div class="setting-group">
+          <div class="checkbox-group">
+            <label for="reassignedCheck">
+              <input type="checkbox" id="reassignedCheck" checked>
+              <span>Enhanced</span>
+            </label>
+          </div>
         </div>
-      </div>
 
-      <div class="setting-group">
-        <div class="checkbox-group">
-          <input type="checkbox" id="alwaysOnTopCheck" checked>
-          <label for="alwaysOnTopCheck">Always On Top</label>
+        <div class="setting-group">
+          <div class="checkbox-group">
+            <label for="naturalCheck">
+              <input type="checkbox" id="naturalCheck" checked>
+              <span>Natural</span>
+            </label>
+          </div>
         </div>
-      </div>
 
-      <div class="setting-group">
-        <div class="checkbox-group">
-          <input type="checkbox" id="agcCheck" checked>
-          <label for="agcCheck">Auto Gain Control</label>
+        <div class="setting-group">
+          <div class="checkbox-group">
+            <label for="alwaysOnTopCheck">  
+              <input type="checkbox" id="alwaysOnTopCheck" checked>
+              <span>On Top</span>
+            </label>
+          </div>
         </div>
-      </div>
 
-      <div class="setting-group">
-        <div class="setting-label">
-          <label>AGC Strength</label>
-          <span class="setting-value" id="agcStrengthValue">0.70</span>
+        <div class="setting-group">
+          <div class="checkbox-group">
+            <label for="agcCheck">
+              <input type="checkbox" id="agcCheck" checked>
+              <span>Auto Gain</span>
+            </label>
+          </div>
         </div>
-        <input type="range" id="agcStrength" min="0" max="1" step="0.05" value="0.7">
+
       </div>
     `;
 
-    // Attach event listeners with auto-save
-    document.getElementById('colormapSelect').addEventListener('change', (e) => {
-      this.settings.colormap = e.target.value;
-      document.getElementById('colormapValue').textContent = e.target.value.charAt(0).toUpperCase() + e.target.value.slice(1);
-      this.saveSettings();
-    });
+    this.attachSettingsListeners();
+  }
 
-    document.getElementById('dbRange').addEventListener('input', (e) => {
+  attachSettingsListeners() {
+    const addListener = (id, event, handler) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener(event, handler);
+    };
+
+    // Custom colormap dropdown handlers
+    this.setupColormapDropdown();
+
+    addListener('dbRange', 'input', (e) => {
       this.settings.dbRange = parseFloat(e.target.value);
       document.getElementById('dbRangeValue').textContent = e.target.value;
       this.saveSettings();
     });
 
-    document.getElementById('gain').addEventListener('input', (e) => {
+    addListener('gain', 'input', (e) => {
       this.settings.gain = parseFloat(e.target.value);
       document.getElementById('gainValue').textContent = parseFloat(e.target.value).toFixed(1);
       this.saveSettings();
     });
 
-    document.getElementById('freqScale').addEventListener('input', (e) => {
+    addListener('freqScale', 'input', (e) => {
       this.settings.frequencyScale = parseFloat(e.target.value);
       document.getElementById('freqScaleValue').textContent = parseFloat(e.target.value).toFixed(1);
+      SPECTRUM_BAR_CACHE.clear();
       this.saveSettings();
     });
 
-    document.getElementById('lowEnd').addEventListener('input', (e) => {
+    addListener('lowEnd', 'input', (e) => {
       this.settings.lowEndBoost = parseFloat(e.target.value);
       document.getElementById('lowEndValue').textContent = parseFloat(e.target.value).toFixed(1) + 'x';
       this.saveSettings();
     });
 
-    document.getElementById('noiseGate').addEventListener('input', (e) => {
+    addListener('noiseGate', 'input', (e) => {
       this.settings.noiseGate = parseFloat(e.target.value);
       document.getElementById('noiseGateValue').textContent = e.target.value + ' dB';
       this.saveSettings();
     });
 
-    document.getElementById('smoothing').addEventListener('input', (e) => {
+    addListener('smoothing', 'input', (e) => {
       this.settings.smoothing = parseFloat(e.target.value);
       document.getElementById('smoothingValue').textContent = parseFloat(e.target.value).toFixed(2);
       this.saveSettings();
     });
 
-    document.getElementById('reassignedCheck').addEventListener('change', (e) => {
+    addListener('reassignedCheck', 'change', (e) => {
       this.settings.useReassignment = e.target.checked;
       this.saveSettings();
     });
 
-    document.getElementById('naturalCheck').addEventListener('change', (e) => {
+    addListener('naturalCheck', 'change', (e) => {
       this.settings.naturalWeighting = e.target.checked;
       this.saveSettings();
     });
 
-    document.getElementById('alwaysOnTopCheck').addEventListener('change', (e) => {
+    addListener('alwaysOnTopCheck', 'change', (e) => {
       this.settings.alwaysOnTop = e.target.checked;
-      const { ipcRenderer } = require('electron');
       ipcRenderer.send('set-always-on-top', e.target.checked);
       this.saveSettings();
     });
 
-    document.getElementById('agcCheck').addEventListener('change', (e) => {
+    addListener('agcCheck', 'change', (e) => {
       this.settings.enableAGC = e.target.checked;
-      if (!e.target.checked) {
-        // Reset gain when disabling AGC
-        this.state.currentGain = 1.0;
-      }
+      if (!e.target.checked) this.state.currentGain = 1.0;
       this.saveSettings();
     });
 
-    document.getElementById('agcStrength').addEventListener('input', (e) => {
+    addListener('agcStrength', 'input', (e) => {
       this.settings.agcStrength = parseFloat(e.target.value);
       document.getElementById('agcStrengthValue').textContent = parseFloat(e.target.value).toFixed(2);
       this.saveSettings();
     });
 
-    document.getElementById('resetSettingsBtn').addEventListener('click', () => {
-      // Reset to default values
+    addListener('resetSettingsBtn', 'click', () => {
       const defaultSettings = {
         fftSize: 4096,
         hopSize: 8192,
         useReassignment: true,
-        colormap: 'flame',
-        dbRange: 120,
-        gain: 4.6,
+        colormap: 'inferno',
+        dbRange: 50,
+        gain: 10.0,
         naturalWeighting: true,
         frequencyScale: 1.0,
-        lowEndBoost: 5.0,
-        smoothing: 0.5,
-        noiseGate: -80,
+        lowEndBoost: 10.0,
+        smoothing: 0.35,
+        noiseGate: -60,
         alwaysOnTop: true,
         enableAGC: true,
-        agcStrength: 0.7,
+        agcStrength: 1.0,
         sampleRate: this.audioCtx.sampleRate
       };
       
@@ -995,14 +1168,26 @@ class AudioSpectrogram {
       this.updateUIFromSettings();
       this.saveSettings();
       
-      // Update always on top
-      const { ipcRenderer } = require('electron');
       ipcRenderer.send('set-always-on-top', this.settings.alwaysOnTop);
     });
   }
 
   resizeCanvas() {
     const dpr = window.devicePixelRatio || 1;
+    
+    // Save the current aux canvas content before resizing
+    const oldAuxCanvas = this.auxCanvas;
+    const oldWidth = oldAuxCanvas.width;
+    const oldHeight = oldAuxCanvas.height;
+    
+    // Create temporary canvas to store old content
+    const tempCanvas = new OffscreenCanvas(oldWidth, oldHeight);
+    const tempCtx = tempCanvas.getContext('2d', { alpha: false });
+    if (oldWidth > 0 && oldHeight > 0) {
+      tempCtx.drawImage(oldAuxCanvas, 0, 0);
+    }
+    
+    // Update main canvas size
     this.canvas.width = window.innerWidth * dpr;
     this.canvas.height = window.innerHeight * dpr;
     this.canvas.style.width = window.innerWidth + 'px';
@@ -1010,11 +1195,21 @@ class AudioSpectrogram {
     
     this.ctx.setTransform(1, 0, 0, 1, 0, 0);
     
+    // Update aux canvas size
     this.auxCanvas.width = this.canvas.width;
     this.auxCanvas.height = this.canvas.height;
     this.auxCtx.imageSmoothingEnabled = false;
     
-    this.state.staticSpectrogramIdx = 0;
+    // Restore the old content, scaled to new height
+    if (oldWidth > 0 && oldHeight > 0) {
+      this.auxCtx.drawImage(tempCanvas, 
+        0, 0, oldWidth, oldHeight,
+        0, 0, oldWidth, this.canvas.height
+      );
+    }
+    
+    // Clear caches on resize
+    SPECTRUM_BAR_CACHE.clear();
   }
 
   async start() {
@@ -1062,104 +1257,92 @@ class AudioSpectrogram {
   }
 
   analyzeFrame() {
+    if (this.isPaused) return; // Don't process new frames when paused
+    
     this.state.isReassigned = this.settings.useReassignment;
     const pcmData = renderOscilloscope(this.state.oscilloscopeBuffer, this.state.oscilloscopeIdx);
 
     let effectiveGain = this.settings.gain;
     
     if (this.settings.enableAGC) {
-      // Calculate current audio level
       const rms = calculateRMS(pcmData);
       const peak = calculatePeakLevel(pcmData);
+      const currentLevel = rms * 2 + peak * 0.5;
       
-      // Use RMS for gentle normalization, but prevent clipping with peak
-      const currentLevel = rms * 2 + peak * 0.5; // Weighted combination
-      
-      if (currentLevel > 0.001) { // Only adjust if there's actual signal
-        // Calculate desired gain
+      if (currentLevel > 0.001) {
         const desiredGain = this.state.targetRMS / currentLevel;
-        
-        // Apply AGC strength (0 = no AGC, 1 = full AGC)
         const agcGain = 1.0 + (desiredGain - 1.0) * this.settings.agcStrength;
         
-        // Smooth the gain changes to avoid sudden jumps
         this.state.currentGain = this.state.currentGain * this.state.gainSmoothingFactor + 
                                   agcGain * (1 - this.state.gainSmoothingFactor);
-        
-        // Clamp gain to reasonable range (0.1x to 10x)
         this.state.currentGain = clamp(this.state.currentGain, 0.1, 10);
-        
-        // Combine manual gain with AGC gain
         effectiveGain = this.settings.gain * this.state.currentGain;
       }
     } else {
-      // Reset to manual gain when AGC is off
       this.state.currentGain = 1.0;
     }
     
-    // Pass noiseGate parameter
     const spectrumData = generateSpectrum(
-      pcmData, 
-      false, 
-      effectiveGain,
-      this.settings.naturalWeighting, 
-      this.audioCtx.sampleRate, 
-      this.settings.fftSize, 
-      this.settings.lowEndBoost,
-      this.settings.noiseGate
+      pcmData, false, effectiveGain, this.settings.naturalWeighting, 
+      this.audioCtx.sampleRate, this.settings.fftSize, 
+      this.settings.lowEndBoost, this.settings.noiseGate
     );
 
     if (this.state.isReassigned) {
       const auxSpectrum = generateSpectrum(
-        pcmData, 
-        true, 
-        effectiveGain,
-        this.settings.naturalWeighting, 
-        this.audioCtx.sampleRate, 
-        this.settings.fftSize, 
-        this.settings.lowEndBoost,
-        this.settings.noiseGate
+        pcmData, true, effectiveGain, this.settings.naturalWeighting, 
+        this.audioCtx.sampleRate, this.settings.fftSize, 
+        this.settings.lowEndBoost, this.settings.noiseGate
       );
+      
+      const magnitudes = new Float32Array(spectrumData.length);
+      for (let i = 0; i < spectrumData.length; i++) {
+        magnitudes[i] = spectrumData[i].magnitude;
+      }
+      
       this.state.spectrum = calcReassignedSpectrum(
-        spectrumData.map(x => x.magnitude),
+        magnitudes,
         calcReassignedFreqs(spectrumData, auxSpectrum, this.state.oscilloscopeBuffer.length, this.audioCtx.sampleRate),
         this.canvas.width,
         this.settings.frequencyScale
       );
     } else {
-      this.state.spectrum = spectrumData.map(x => x.magnitude);
-    }
-
-    // Apply smoothing if enabled
-    if (this.settings.smoothing > 0 && this.state.prevSpectrum.length === this.state.spectrum.length) {
-      for (let i = 0; i < this.state.spectrum.length; i++) {
-        this.state.spectrum[i] = this.state.spectrum[i] * (1 - this.settings.smoothing) + this.state.prevSpectrum[i] * this.settings.smoothing;
+      this.state.spectrum = new Float32Array(spectrumData.length);
+      for (let i = 0; i < spectrumData.length; i++) {
+        this.state.spectrum[i] = spectrumData[i].magnitude;
       }
     }
-    this.state.prevSpectrum = [...this.state.spectrum];
+
+    // Apply smoothing
+    if (this.settings.smoothing > 0 && this.state.prevSpectrum.length === this.state.spectrum.length) {
+      const smoothFactor = this.settings.smoothing;
+      const invSmoothFactor = 1 - smoothFactor;
+      
+      for (let i = 0; i < this.state.spectrum.length; i++) {
+        this.state.spectrum[i] = this.state.spectrum[i] * invSmoothFactor + 
+                                  this.state.prevSpectrum[i] * smoothFactor;
+      }
+    }
+    this.state.prevSpectrum = new Float32Array(this.state.spectrum);
+
+    // Use preview colormap if hovering, otherwise use selected colormap
+    const activeColormap = this.previewColormap || this.settings.colormap;
 
     if (this.state.isReassigned) {
       printSpectrogram(
-        this.auxCtx,
-        this.auxCanvas,
-        this.state.spectrum,
-        undefined,
-        this.settings.colormap,
-        this.settings.dbRange,
-        this.state.staticSpectrogramIdx,
-        false
+        this.auxCtx, this.auxCanvas, this.state.spectrum, undefined,
+        activeColormap, this.settings.dbRange, 
+        this.state.staticSpectrogramIdx, false
       );
     } else {
-      const linearBinData = generateSpectrumBarData(this.canvas.height, this.settings.fftSize, this.audioCtx.sampleRate, this.settings.frequencyScale);
+      const linearBinData = generateSpectrumBarData(
+        this.canvas.height, this.settings.fftSize, 
+        this.audioCtx.sampleRate, this.settings.frequencyScale
+      );
       printSpectrogram(
-        this.auxCtx,
-        this.auxCanvas,
-        this.state.spectrum,
-        linearBinData,
-        this.settings.colormap,
-        this.settings.dbRange,
-        this.state.staticSpectrogramIdx,
-        false
+        this.auxCtx, this.auxCanvas, this.state.spectrum, linearBinData,
+        activeColormap, this.settings.dbRange, 
+        this.state.staticSpectrogramIdx, false
       );
     }
 
