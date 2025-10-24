@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "dist": "electron-builder --publish always"
   },
   "dependencies": {
     "electron-audio-loopback": "^1.0.6",
@@ -20,13 +20,6 @@
     "electron-builder": "^26.0.12"
   },
   "build": {
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "effree",
-        "repo": "EM-Spec"
-      }
-    ],
     "appId": "com.effree.emspec",
     "productName": "EM-Spec",
     "directories": {
@@ -36,17 +29,21 @@
       "**/*",
       "!node_modules/.cache"
     ],
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "effree",
+        "repo": "EM-Spec"
+      }
+    ],
     "mac": {
       "category": "public.app-category.music",
-      "target": [
-        "dmg"
-      ],
+      "target": ["dmg"],
       "icon": "assets/icon.icns"
     },
     "win": {
-      "target": [
-        "nsis"
-      ],
+      "target": ["nsis"],
       "icon": "assets/icon.ico"
     },
     "nsis": {
