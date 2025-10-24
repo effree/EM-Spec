@@ -41,11 +41,13 @@
       "category": "public.app-category.music",
       "target": ["dmg"],
       "icon": "assets/icon.icns",
-      "sign": false
+      "identity": null
     },
     "win": {
       "target": ["nsis"],
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.ico",
+      "signingHashAlgorithms": ["sha256"],
+      "sign": null
     },
     "nsis": {
       "oneClick": false,

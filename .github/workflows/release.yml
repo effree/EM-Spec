@@ -25,18 +25,9 @@ jobs:
         run: npm ci
 
       - name: Build Electron app
-        shell: bash
-        run: |
-          echo "Skipping code signing"
-          export CSC_IDENTITY_AUTO_DISCOVERY=false
-          export CSC_LINK=""
-          export CSC_KEY_PASSWORD=""
-
-          VERSION=$(node -p "require('./package.json').version")
-          echo "Building version $VERSION"
-
-          # Run build
-          npm run dist
+        run: npm run dist
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Upload build artifacts to GitHub Release
         uses: softprops/action-gh-release@v1
