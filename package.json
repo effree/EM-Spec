@@ -1,6 +1,6 @@
 {
   "name": "em-spec",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Real-time audio spectrogram visualizer with enhanced low-end and reassignment method implementation",
   "author": "Jeffrey Meyer",
   "main": "main.js",
