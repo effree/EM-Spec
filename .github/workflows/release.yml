@@ -35,9 +35,6 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           echo "Building version $VERSION"
 
-          # Disable mac signing explicitly
-          npm run dist -- --mac-sign=false
-
           # Run build
           npm run dist
 
