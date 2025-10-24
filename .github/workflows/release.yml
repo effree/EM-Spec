@@ -52,10 +52,15 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
+
+      - name: Display structure of downloaded files
+        run: ls -R artifacts
 
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/**/*
+          files: artifacts/*/*
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
