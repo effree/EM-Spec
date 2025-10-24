@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*.*.*'  # triggers on tags like v0.3.0
+      - 'v*.*.*'  # triggers on tags like v0.2.2
 
 jobs:
   build:
@@ -13,7 +13,7 @@ jobs:
         os: [windows-latest, macos-latest]
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -28,39 +28,19 @@ jobs:
         shell: bash
         run: |
           echo "Skipping code signing"
-
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            export CSC_IDENTITY_AUTO_DISCOVERY=false
-            export CSC_LINK=""
-            export CSC_KEY_PASSWORD=""
-          else
-            export CSC_IDENTITY_AUTO_DISCOVERY=false
-            export CSC_LINK=""
-            export CSC_KEY_PASSWORD=""
-          fi
+          export CSC_IDENTITY_AUTO_DISCOVERY=false
+          export CSC_LINK=""
+          export CSC_KEY_PASSWORD=""
 
           VERSION=$(node -p "require('./package.json').version")
           echo "Building version $VERSION"
 
           # Run build
-          npm run dist -- --config.build.productName="EM-Spec $VERSION"
+          npm run dist
 
-          # Rename artifacts
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            for f in dist/*Setup.exe; do
-              mv "$f" "dist/EM-Spec-$VERSION-Setup.exe"
-            done
-          else
-            for f in dist/*.dmg; do
-              mv "$f" "dist/EM-Spec-$VERSION.dmg"
-            done
-          fi
-
-      - name: Upload build artifacts
+      - name: Upload build artifacts to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            dist/*.exe
-            dist/*.dmg
+          files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
