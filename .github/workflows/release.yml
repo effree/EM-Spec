@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*.*.*'  # triggers on tags like v0.2.2
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}
