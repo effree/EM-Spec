@@ -1,16 +1,58 @@
 {
   "name": "em-spec",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Real-time audio spectrogram visualizer with enhanced low-end and reassignment method implementation",
+  "author": "Jeffrey Meyer",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
   },
   "dependencies": {
-    "active-win": "^8.2.1",
-    "electron": "^38.2.2",
     "electron-audio-loopback": "^1.0.6",
-    "electron-window-state": "^5.0.3",
-    "find-process": "^2.0.0"
+    "electron-log": "^5.4.3",
+    "electron-updater": "^6.6.2",
+    "electron-window-state": "^5.0.3"
+  },
+  "devDependencies": {
+    "electron": "^38.2.2",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "effree",
+        "repo": "EM-Spec"
+      }
+    ],
+    "appId": "com.effree.emspec",
+    "productName": "EM-Spec",
+    "directories": {
+      "buildResources": "assets"
+    },
+    "files": [
+      "**/*",
+      "!node_modules/.cache"
+    ],
+    "mac": {
+      "category": "public.app-category.music",
+      "target": [
+        "dmg"
+      ],
+      "icon": "assets/icon.icns"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    }
   }
 }

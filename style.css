@@ -403,7 +403,7 @@ select option:hover {
 
 .reset-btn {
     width: 100%;
-    padding: 10px;
+    padding: .25rem;
     background: rgba(255, 59, 48, 0.15);
     border: 1px solid rgba(255, 59, 48, 0.3);
     border-radius: 6px;
@@ -420,6 +420,28 @@ select option:hover {
 }
 
 .reset-btn:active {
+    transform: scale(0.98);
+}
+
+#updateButton {
+    width: 100%;
+    padding: .25rem;
+    background: rgba(48, 255, 48, 0.15);
+    border: 1px solid rgba(72, 255, 48, 0.3);
+    border-radius: 6px;
+    color: #5d9919;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+#updateButton:hover {
+    background: rgba(72, 255, 48, 0.25);
+    border-color: rgba(65, 255, 48, 0.5);
+}
+
+#updateButton:active {
     transform: scale(0.98);
 }
 
@@ -521,4 +543,14 @@ select option:hover {
     flex: 1;
     font-size: 12px;
     color: #fff;
+}
+
+#updateSection {
+    margin-bottom: 9px;
+}
+
+#updateStatus {
+    font-size: smaller;
+    color: #6b6b6b;
+    margin-bottom: 5px;
 }

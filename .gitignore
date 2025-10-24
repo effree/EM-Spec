@@ -28,5 +28,8 @@ npm-debug.log*
 .env
 .env.local
 
+# Cheat Sheet
+RELEASE-CHEAT-SHEET.md
+
 # Don't ignore assets
 !assets/

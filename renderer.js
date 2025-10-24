@@ -1,6 +1,42 @@
 const { ipcRenderer } = require('electron');
 const { getLoopbackAudioMediaStream } = require('electron-audio-loopback');
 
+// ===== Auto Update Functions =====
+const updateStatus = document.getElementById('updateStatus');
+const updateButton = document.getElementById('updateButton');
+
+updateButton.style.display = 'none'; // hide initially
+
+ipcRenderer.on('update-available', (event, info) => {
+  updateStatus.innerText = `Update Available: ${info.version}`;
+  updateButton.style.display = 'inline';
+});
+
+ipcRenderer.on('update-not-available', () => {
+  updateStatus.innerText = 'Already up to date';
+  updateButton.style.display = 'none';
+});
+
+ipcRenderer.on('update-download-progress', (event, progress) => {
+  updateStatus.innerText = `Downloading: ${Math.round(progress.percent)}%`;
+});
+
+ipcRenderer.on('update-downloaded', () => {
+  updateStatus.innerText = 'Update downloaded! Click to restart.';
+  updateButton.style.display = 'inline';
+  updateButton.innerText = 'Install Update';
+});
+
+updateButton.addEventListener('click', async () => {
+  ipcRenderer.invoke('install-update');
+});
+
+ipcRenderer.on('update-error', (event, error) => {
+  updateStatus.innerText = `Update check failed: ${error}`;
+  updateButton.style.display = 'none';
+  console.error('Update error:', error);
+});
+
 // ===== Utility Functions =====
 const map = (x, min, max, targetMin, targetMax) => 
   (x - min) / (max - min) * (targetMax - targetMin) + targetMin;
@@ -615,7 +651,6 @@ class AudioSpectrogram {
 
     this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     this.analyser = this.audioCtx.createAnalyser();
-    this.analyser.fftSize = 8192;
 
     const defaultSettings = {
       fftSize: 4096,
@@ -665,9 +700,38 @@ class AudioSpectrogram {
     this.initSettings(defaultSettings);
   }
 
+  updateFFTSize() {
+    // Update analyser FFT size (must be power of 2, between 32 and 32768)
+    const analyserSize = Math.max(32, Math.min(32768, this.settings.fftSize * 2));
+    this.analyser.fftSize = analyserSize;
+    
+    // Resize oscilloscope buffer
+    const oldBuffer = this.state.oscilloscopeBuffer;
+    this.state.oscilloscopeBuffer = new Float32Array(this.settings.fftSize);
+    
+    // Copy over old data if possible
+    const copyLength = Math.min(oldBuffer.length, this.state.oscilloscopeBuffer.length);
+    for (let i = 0; i < copyLength; i++) {
+      this.state.oscilloscopeBuffer[i] = oldBuffer[i];
+    }
+    
+    // Reset index if it's out of bounds
+    if (this.state.oscilloscopeIdx >= this.state.oscilloscopeBuffer.length) {
+      this.state.oscilloscopeIdx = 0;
+    }
+    
+    // Clear spectrum cache
+    this.state.spectrum = [];
+    this.state.prevSpectrum = [];
+    SPECTRUM_BAR_CACHE.clear();
+    
+    console.log(`FFT size updated to ${this.settings.fftSize}, analyser size: ${analyserSize}`);
+  }
+
   async initSettings(defaultSettings) {
     await this.loadSettings(defaultSettings);
     this.updateUIFromSettings();
+    this.updateFFTSize();
     setTimeout(() => this.start(), 500);
   }
 
@@ -702,6 +766,32 @@ class AudioSpectrogram {
       const el = document.getElementById(id);
       if (el) el.checked = this.settings[setting];
     });
+
+    // Update colormap dropdown selected display
+    const dropdownSelected = document.getElementById('colormapSelected');
+    if (dropdownSelected) {
+      const selectedName = dropdownSelected.querySelector('.colormap-name');
+      const selectedGradient = dropdownSelected.querySelector('.colormap-gradient');
+      if (selectedName) {
+        selectedName.textContent = this.settings.colormap.charAt(0).toUpperCase() + this.settings.colormap.slice(1);
+      }
+      if (selectedGradient) {
+        selectedGradient.style.background = this.generateColormapGradient(this.settings.colormap);
+      }
+    }
+
+    // Update which option has the selected class
+    const dropdownOptions = document.getElementById('colormapOptions');
+    if (dropdownOptions) {
+      const options = dropdownOptions.querySelectorAll('.dropdown-option');
+      options.forEach(option => {
+        if (option.dataset.colormap === this.settings.colormap) {
+          option.classList.add('selected');
+        } else {
+          option.classList.remove('selected');
+        }
+      });
+    }
   }
 
   async loadSettings(defaultSettings) {
@@ -811,6 +901,16 @@ class AudioSpectrogram {
     
     if (!dropdownSelected || !dropdownOptions) return;
 
+    // Initialize the selected option based on current settings
+    const options = dropdownOptions.querySelectorAll('.dropdown-option');
+    options.forEach(option => {
+      if (option.dataset.colormap === this.settings.colormap) {
+        option.classList.add('selected');
+      } else {
+        option.classList.remove('selected');
+      }
+    });
+
     // Toggle dropdown
     dropdownSelected.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -828,7 +928,7 @@ class AudioSpectrogram {
     });
 
     // Handle option selection and hover
-    const options = dropdownOptions.querySelectorAll('.dropdown-option');
+    // const options = dropdownOptions.querySelectorAll('.dropdown-option');
     options.forEach(option => {
       const colormapValue = option.dataset.colormap;
       
@@ -1119,6 +1219,7 @@ class AudioSpectrogram {
     document.getElementById('fftSizeSelect').addEventListener('change', (e) => {
       this.settings.fftSize = parseFloat(e.target.value);
       document.getElementById('fftSizeValue').textContent = e.target.value;
+      this.updateFFTSize();
       this.saveSettings();
     });
 
@@ -1214,6 +1315,7 @@ class AudioSpectrogram {
       
       this.settings = { ...defaultSettings };
       this.updateUIFromSettings();
+      this.updateFFTSize();
       this.saveSettings();
       
       ipcRenderer.send('set-always-on-top', this.settings.alwaysOnTop);

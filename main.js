@@ -1,10 +1,18 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const { initMain } = require('electron-audio-loopback');
+const { autoUpdater } = require('electron-updater');
+autoUpdater.logger = require('electron-log');
+autoUpdater.logger.transports.file.level = 'info';
 const windowStateKeeper = require('electron-window-state');
 const path = require('path');
 const fs = require('fs');
 
 let mainWindow;
+
+autoUpdater.on('error', (err) => {
+  console.error('Update error:', err);
+  mainWindow?.webContents.send('update-error', err.message);
+});
 
 // Path to store settings
 const userDataPath = app.getPath('userData');
@@ -101,8 +109,54 @@ app.on('ready', () => {
   mainWindow.loadFile('index.html');
   // mainWindow.webContents.openDevTools();
 
-  ensureStateFile();
-  watchStateFile();
+  mainWindow.webContents.on('did-finish-load', () => {
+    ensureStateFile();
+    watchStateFile();
+    
+    // Check for updates after a short delay
+    setTimeout(() => {
+      console.log('Checking for updates...');
+      autoUpdater.checkForUpdatesAndNotify();
+    }, 2000);
+  });
+
+});
+
+// Listen for manual update checks from renderer
+ipcMain.handle('check-for-updates', async () => {
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return result; // will include version info
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// Send update events to renderer
+autoUpdater.on('update-available', (info) => {
+  mainWindow?.webContents.send('update-available', info);
+});
+
+autoUpdater.on('update-not-available', () => {
+  mainWindow?.webContents.send('update-not-available');
+});
+
+autoUpdater.on('download-progress', (progress) => {
+  mainWindow?.webContents.send('update-download-progress', progress);
+});
+
+autoUpdater.on('update-downloaded', () => {
+  mainWindow?.webContents.send('update-downloaded');
+});
+
+autoUpdater.on('checking-for-update', () => {
+  console.log('Checking for update...');
+  mainWindow?.webContents.send('checking-for-update');
+});
+
+// Install update when user accepts
+ipcMain.handle('install-update', async () => {
+  autoUpdater.quitAndInstall();
 });
 
 // Mouse position tracking for renderer
