@@ -1,13 +1,13 @@
 {
   "name": "em-spec",
-  "version": "0.2.3",
+  "version": "0.2.2",
   "description": "Real-time audio spectrogram visualizer with enhanced low-end and reassignment method implementation",
   "author": "Jeffrey Meyer",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder --publish always"
+    "dist": "electron-builder"
   },
   "dependencies": {
     "electron-audio-loopback": "^1.0.6",

@@ -34,14 +34,28 @@ jobs:
         run: npm ci
 
       - name: Build Electron app
-        run: npm run dist
+        run: npm run dist -- --${{ matrix.arch }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload build artifacts to GitHub Release
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/*
+          files: artifacts/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
