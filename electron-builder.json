@@ -1,0 +1,3 @@
+{
+  "afterPack": "./build-scripts/remove-licenses.js"
+}

@@ -81,7 +81,8 @@ app.on('ready', () => {
   
   let mainWindowState = windowStateKeeper({
     defaultWidth: 1400,
-    defaultHeight: 900
+    defaultHeight: 900,
+    fullScreen: false
   });
 
   mainWindow = new BrowserWindow({
@@ -93,21 +94,22 @@ app.on('ready', () => {
     minHeight: 150,
     frame: false,
     transparent: true,
+    resizable: false,
     icon: path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : process.platform === 'darwin' ? 'icon.icns' : 'icon.png'),
     webPreferences: {
       nodeIntegration: true,
-      contextIsolation: false,
-      enableRemoteModule: true
+      contextIsolation: false
     }
   });
-  mainWindowState.manage(mainWindow);
 
   mainWindow.setAlwaysOnTop(true, "floating");
   mainWindow.setVisibleOnAllWorkspaces(true);
   mainWindow.setFullScreenable(false);
 
+  mainWindowState.manage(mainWindow);
+
   mainWindow.loadFile('index.html');
-  // mainWindow.webContents.openDevTools();
+  mainWindow.webContents.openDevTools({mode:'detach'});
 
   mainWindow.webContents.on('did-finish-load', () => {
     ensureStateFile();
@@ -189,6 +191,21 @@ ipcMain.on('stop-mouse-tracking', () => {
 ipcMain.on('set-always-on-top', (event, shouldBeOnTop) => {
   if (mainWindow) {
     mainWindow.setAlwaysOnTop(shouldBeOnTop, "floating");
+  }
+});
+
+// Get window bounds
+ipcMain.handle('get-window-bounds', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    return mainWindow.getBounds();
+  }
+  return { x: 0, y: 0, width: 800, height: 600 };
+});
+
+// Handle window resize with position (for dragging edges)
+ipcMain.on('resize-window-bounds', (event, bounds) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setBounds(bounds);
   }
 });
 

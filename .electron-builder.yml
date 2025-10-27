@@ -1,0 +1,47 @@
+appId: com.effree.emspec
+productName: EM-Spec
+compression: maximum
+directories:
+  buildResources: assets
+  output: dist
+
+files:
+  - main.js
+  - renderer.js
+  - index.html
+  - style.css
+  - assets/**/*
+  - package.json
+  - "!**/*.md"
+  - "!**/*.txt"
+  - "!**/LICENSE*"
+  - "!**/CHANGELOG*"
+  - "!**/*.map"
+  - "!**/test/**"
+  - "!**/tests/**"
+  - "!**/__tests__/**"
+  - "!**/docs/**"
+  - "!**/.github/**"
+  - "!**/examples/**"
+  - "!node_modules/.cache"
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: assets/icon.ico
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  deleteAppDataOnUninstall: true
+
+mac:
+  category: public.app-category.music
+  target: dmg
+  icon: assets/icon.icns
+  identity: null
+
+afterPack: ./build-scripts/remove-licenses.js

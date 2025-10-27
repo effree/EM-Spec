@@ -2,12 +2,23 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>EM-Spec 0.2.6</title>
+  <title>EM-Spec 0.2.7</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div id="container">
     <canvas id="canvas"></canvas>
+
+    <!-- Add these resize handles -->
+    <div class="resize-handle resize-handle-n" data-direction="n"></div>
+    <div class="resize-handle resize-handle-s" data-direction="s"></div>
+    <div class="resize-handle resize-handle-e" data-direction="e"></div>
+    <div class="resize-handle resize-handle-w" data-direction="w"></div>
+    <div class="resize-handle resize-handle-ne" data-direction="ne"></div>
+    <div class="resize-handle resize-handle-nw" data-direction="nw"></div>
+    <div class="resize-handle resize-handle-se" data-direction="se"></div>
+    <div class="resize-handle resize-handle-sw" data-direction="sw"></div>
+
     <div id="freqHover">
       <div id="freqLine"></div>
       <div id="freqLabel"></div>

@@ -385,7 +385,7 @@ function generateSpectrum(data, deltaWindow, gain, naturalWeighting, sampleRate,
   if (lowEndBoost > 1.0) {
     complexFFT = applyLowEndBoost(complexFFT, sampleRate, fftSize, lowEndBoost);
   }
-  
+
   return complexFFT;
 }
 
@@ -403,29 +403,44 @@ function generateSpectrumBarData(size, length, sampleRate, frequencyScale) {
   
   const min = 20;
   const max = 20000;
-  const minIdx = hertzToFFTBin(min, 'floor', length, sampleRate);
-  const maxIdx = hertzToFFTBin(max, 'ceil', length, sampleRate);
-  
   const spectrogramBars = [];
   
-  for (let i = minIdx; i <= maxIdx; i++) {
-    const lowerBound = logScale(fftBinToHertz(i - 0.5, length, sampleRate), frequencyScale);
-    const higherBound = logScale(fftBinToHertz(i + 0.5, length, sampleRate), frequencyScale);
-    const lowerVisible = clamp(Math.round(lowerBound * size), 0, size);
-    const higherVisible = clamp(Math.round(higherBound * size), 0, size);
+  // Iterate through each PIXEL instead of each bin
+  for (let pixel = 0; pixel < size; pixel++) {
+    // What frequency range does this pixel represent?
+    const pixelStart = pixel / size;
+    const pixelEnd = (pixel + 1) / size;
     
-    if (lowerVisible !== higherVisible) {
-      spectrogramBars.push({
-        lo: i,
-        hi: i,
-        start: lowerVisible,
-        end: higherVisible
-      });
-    } else if (spectrogramBars.length > 0) {
-      const lastBin = spectrogramBars[spectrogramBars.length - 1];
-      lastBin.lo = Math.min(lastBin.lo, i);
-      lastBin.hi = Math.max(lastBin.hi, i);
+    // Convert from normalized position to frequency
+    let freqStart, freqEnd;
+    
+    if (frequencyScale < 0.5) {
+      // Hybrid linear/log scale
+      const linearAmount = 1 - (frequencyScale * 2);
+      const logAmount = frequencyScale * 2;
+      
+      freqStart = (min + pixelStart * (max - min)) * linearAmount + 
+                  (min * Math.pow(max / min, pixelStart)) * logAmount;
+      freqEnd = (min + pixelEnd * (max - min)) * linearAmount + 
+                (min * Math.pow(max / min, pixelEnd)) * logAmount;
+    } else {
+      // Pure log scale
+      freqStart = min * Math.pow(max / min, pixelStart);
+      freqEnd = min * Math.pow(max / min, pixelEnd);
     }
+    
+    // Convert frequencies to fractional bin numbers
+    const binStart = freqStart * length / sampleRate;
+    const binEnd = freqEnd * length / sampleRate;
+    
+    spectrogramBars.push({
+      lo: Math.floor(binStart),
+      hi: Math.ceil(binEnd),
+      loFrac: binStart - Math.floor(binStart),  // Fractional part
+      hiFrac: Math.ceil(binEnd) - binEnd,       // Fractional part
+      start: pixel,
+      end: pixel + 1
+    });
   }
   
   SPECTRUM_BAR_CACHE.set(key, spectrogramBars);
@@ -610,6 +625,8 @@ function printSpectrogram(auxCtx, auxCanvas, data, linearBinData, colormap, dbRa
     
     if (isLinearBins) {
       const bin = linearBinData[i];
+      
+      // Simple max across bin range
       for (let idx = bin.lo; idx <= bin.hi; idx++) {
         const binIdx = idxWrapOver(idx, data.length);
         mag = Math.max(mag, data[binIdx]);
@@ -654,7 +671,9 @@ class AudioSpectrogram {
 
     const defaultSettings = {
       fftSize: 4096,
-      hopSize: 8192,
+      hopSize: 64,
+      // hopSizeRatio: 0.125,
+      scrollSpeed: 1.0,
       useReassignment: true,
       colormap: 'inferno',
       dbRange: 50,
@@ -686,7 +705,9 @@ class AudioSpectrogram {
       isReassigned: false,
       targetRMS: 0.1,
       currentGain: 1.0,
-      gainSmoothingFactor: 0.95
+      gainSmoothingFactor: 0.95,
+      frameBuffer: [],           // Stores computed frames
+      frameSkipCounter: 0.0,     // Accumulates scroll speed
     };
 
     this.auxCanvas = new OffscreenCanvas(this.canvas.width, this.canvas.height);
@@ -743,18 +764,28 @@ class AudioSpectrogram {
       if (textEl) textEl.textContent = formatter ? formatter(value) : value;
     };
 
+    // Update dropdowns (FFT size)
+    const fftSelect = document.getElementById('fftSizeSelect');
+    if (fftSelect) {
+      fftSelect.value = this.settings.fftSize;
+      document.getElementById('fftSizeValue').textContent = this.settings.fftSize;
+    }
+
+    // Update colormap
     updateElement('colormapSelect', this.settings.colormap, 'colormapValue', 
       v => v.charAt(0).toUpperCase() + v.slice(1));
+    
+    // Update sliders
     updateElement('dbRange', this.settings.dbRange, 'dbRangeValue');
-    updateElement('fftSize', this.settings.fftSize, 'fftSizeValue');
-    updateElement('hopSize', this.settings.hopSize, 'hopSizeValue');
     updateElement('gain', this.settings.gain, 'gainValue', v => v.toFixed(1));
     updateElement('freqScale', this.settings.frequencyScale, 'freqScaleValue', v => v.toFixed(1));
     updateElement('lowEnd', this.settings.lowEndBoost, 'lowEndValue', v => v.toFixed(1) + 'x');
     updateElement('smoothing', this.settings.smoothing, 'smoothingValue', v => v.toFixed(2));
     updateElement('noiseGate', this.settings.noiseGate, 'noiseGateValue', v => v + ' dB');
     updateElement('agcStrength', this.settings.agcStrength, 'agcStrengthValue', v => v.toFixed(2));
+    updateElement('scrollSpeed', this.settings.scrollSpeed, 'scrollSpeedValue', v => v.toFixed(1) + 'x');
 
+    // Update checkboxes
     const checkboxes = [
       ['reassignedCheck', 'useReassignment'],
       ['naturalCheck', 'naturalWeighting'],
@@ -814,6 +845,7 @@ class AudioSpectrogram {
       const settingsToSave = {
         fftSize: this.settings.fftSize,
         hopSize: this.settings.hopSize,
+        scrollSpeed: this.settings.scrollSpeed,
         useReassignment: this.settings.useReassignment,
         colormap: this.settings.colormap,
         dbRange: this.settings.dbRange,
@@ -888,6 +920,75 @@ class AudioSpectrogram {
       } else {
         this.freqHover?.classList.remove('active');
       }
+    });
+
+    this.setupResizeHandles();
+  }
+
+  setupResizeHandles() {
+    const resizeHandles = document.querySelectorAll('.resize-handle');
+    
+    resizeHandles.forEach(handle => {
+      const direction = handle.dataset.direction;
+      
+      handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        // Get initial window bounds via IPC
+        ipcRenderer.invoke('get-window-bounds').then(startBounds => {
+          const startX = e.screenX;
+          const startY = e.screenY;
+          
+          const onMouseMove = (moveEvent) => {
+            const deltaX = moveEvent.screenX - startX;
+            const deltaY = moveEvent.screenY - startY;
+            
+            let newBounds = { ...startBounds };
+            
+            // Calculate new bounds based on direction
+            if (direction.includes('n')) {
+              newBounds.y = startBounds.y + deltaY;
+              newBounds.height = startBounds.height - deltaY;
+            }
+            if (direction.includes('s')) {
+              newBounds.height = startBounds.height + deltaY;
+            }
+            if (direction.includes('e')) {
+              newBounds.width = startBounds.width + deltaX;
+            }
+            if (direction.includes('w')) {
+              newBounds.x = startBounds.x + deltaX;
+              newBounds.width = startBounds.width - deltaX;
+            }
+            
+            // Enforce minimum size
+            if (newBounds.width < 150) {
+              if (direction.includes('w')) {
+                newBounds.x = startBounds.x + startBounds.width - 150;
+              }
+              newBounds.width = 150;
+            }
+            if (newBounds.height < 150) {
+              if (direction.includes('n')) {
+                newBounds.y = startBounds.y + startBounds.height - 150;
+              }
+              newBounds.height = 150;
+            }
+            
+            // Send resize command via IPC
+            ipcRenderer.send('resize-window-bounds', newBounds);
+          };
+          
+          const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+          };
+          
+          document.addEventListener('mousemove', onMouseMove);
+          document.addEventListener('mouseup', onMouseUp);
+        });
+      });
     });
   }
 
@@ -1048,17 +1149,11 @@ class AudioSpectrogram {
     const currentGradient = this.generateColormapGradient(this.settings.colormap);
     const currentName = this.settings.colormap.charAt(0).toUpperCase() + this.settings.colormap.slice(1);
 
-    // Generate FFT size options (powers of 2 from 1024 to 16384)
-    const fftSizes = [1024, 2048, 4096, 8192, 16384];
+    // Generate FFT size options (powers of 2 from 1024 to 8192)
+    const fftSizes = [1024, 2048, 4096, 8192];
     const fftSizeOptions = fftSizes.map(size => 
       `<option value="${size}" ${this.settings.fftSize === size ? 'selected' : ''}>${size}</option>`
     ).join('');
-
-    // Generate hop size options (powers of 2 from 1024 to 16384)
-    const hopSizeOptions = fftSizes.map(size => 
-      `<option value="${size}" ${this.settings.hopSize === size ? 'selected' : ''}>${size}</option>`
-    ).join('');
-
 
     this.settingsContent.innerHTML = `
       <div class="setting-group">
@@ -1073,16 +1168,6 @@ class AudioSpectrogram {
           </div>
           <select id="fftSizeSelect" class="setting-dropdown">
             ${fftSizeOptions}
-          </select>
-        </div>
-
-        <div class="setting-group">
-          <div class="setting-label">
-            <label>Hop Size</label>
-            <span class="setting-value" id="hopSizeValue">${this.settings.hopSize}</span>
-          </div>
-          <select id="hopSizeSelect" class="setting-dropdown">
-            ${hopSizeOptions}
           </select>
         </div>
       </div>
@@ -1163,6 +1248,14 @@ class AudioSpectrogram {
         <input type="range" id="smoothing" min="0" max="0.5" step="0.05" value="0.5">
       </div>
 
+      <div class="setting-group">
+        <div class="setting-label">
+          <label>Scroll Speed</label>
+          <span class="setting-value" id="scrollSpeedValue">1.0x</span>
+        </div>
+        <input type="range" id="scrollSpeed" min="0.1" max="3.0" step="0.1" value="1.0">
+      </div>
+
       <div class="button-group">
 
         <div class="setting-group">
@@ -1223,9 +1316,9 @@ class AudioSpectrogram {
       this.saveSettings();
     });
 
-    document.getElementById('hopSizeSelect').addEventListener('change', (e) => {
-      this.settings.hopSize = parseFloat(e.target.value);
-      document.getElementById('hopSizeValue').textContent = e.target.value;
+    addListener('scrollSpeed', 'input', (e) => {
+      this.settings.scrollSpeed = parseFloat(e.target.value);
+      document.getElementById('scrollSpeedValue').textContent = parseFloat(e.target.value).toFixed(1) + 'x';
       this.saveSettings();
     });
 
@@ -1297,7 +1390,9 @@ class AudioSpectrogram {
     addListener('resetSettingsBtn', 'click', () => {
       const defaultSettings = {
         fftSize: 4096,
-        hopSize: 8192,
+        hopSize: 64,
+        // hopSizeRatio: 0.125,
+        scrollSpeed: 1.0,  // Added
         useReassignment: true,
         colormap: 'inferno',
         dbRange: 50,
@@ -1407,7 +1502,7 @@ class AudioSpectrogram {
   }
 
   analyzeFrame() {
-    if (this.isPaused) return; // Don't process new frames when paused
+    if (this.isPaused) return;
     
     this.state.isReassigned = this.settings.useReassignment;
     const pcmData = renderOscilloscope(this.state.oscilloscopeBuffer, this.state.oscilloscopeIdx);
@@ -1438,6 +1533,8 @@ class AudioSpectrogram {
       this.settings.lowEndBoost, this.settings.noiseGate
     );
 
+    let spectrum;
+
     if (this.state.isReassigned) {
       const auxSpectrum = generateSpectrum(
         pcmData, true, effectiveGain, this.settings.naturalWeighting, 
@@ -1450,37 +1547,69 @@ class AudioSpectrogram {
         magnitudes[i] = spectrumData[i].magnitude;
       }
       
-      this.state.spectrum = calcReassignedSpectrum(
+      spectrum = calcReassignedSpectrum(
         magnitudes,
         calcReassignedFreqs(spectrumData, auxSpectrum, this.state.oscilloscopeBuffer.length, this.audioCtx.sampleRate),
         this.canvas.width,
         this.settings.frequencyScale
       );
     } else {
-      this.state.spectrum = new Float32Array(spectrumData.length);
+      spectrum = new Float32Array(spectrumData.length);
       for (let i = 0; i < spectrumData.length; i++) {
-        this.state.spectrum[i] = spectrumData[i].magnitude;
+        spectrum[i] = spectrumData[i].magnitude;
       }
     }
 
     // Apply smoothing
-    if (this.settings.smoothing > 0 && this.state.prevSpectrum.length === this.state.spectrum.length) {
+    if (this.settings.smoothing > 0 && this.state.prevSpectrum.length === spectrum.length) {
       const smoothFactor = this.settings.smoothing;
       const invSmoothFactor = 1 - smoothFactor;
       
-      for (let i = 0; i < this.state.spectrum.length; i++) {
-        this.state.spectrum[i] = this.state.spectrum[i] * invSmoothFactor + 
-                                  this.state.prevSpectrum[i] * smoothFactor;
+      for (let i = 0; i < spectrum.length; i++) {
+        // Use MAX of smoothed and current (peak-hold behavior)
+        const smoothed = spectrum[i] * invSmoothFactor + 
+                        this.state.prevSpectrum[i] * smoothFactor;
+        spectrum[i] = Math.max(spectrum[i], smoothed * 0.95); // Slight decay
       }
     }
-    this.state.prevSpectrum = new Float32Array(this.state.spectrum);
+    this.state.prevSpectrum = new Float32Array(spectrum);
 
-    // Use preview colormap if hovering, otherwise use selected colormap
+    // Store the computed frame
+    this.state.frameBuffer.push({
+      spectrum: spectrum,
+      isReassigned: this.state.isReassigned
+    });
+
+    // Limit buffer size to prevent memory issues
+    while (this.state.frameBuffer.length > 200) {
+      this.state.frameBuffer.shift();
+    }
+
+    // Display frames based on scroll speed
+    this.state.frameSkipCounter += this.settings.scrollSpeed;
+
+    while (this.state.frameSkipCounter >= 1.0) {
+      this.state.frameSkipCounter -= 1.0;
+      
+      const frame = this.state.frameBuffer.length > 1 
+        ? this.state.frameBuffer.shift() 
+        : { spectrum: spectrum, isReassigned: this.state.isReassigned };
+      
+      this.renderSpectrumFrame(frame);
+    }
+
+    // If scrolling very slowly, make sure we don't accumulate too many frames
+    if (this.state.frameBuffer.length > 100) {
+      this.state.frameBuffer.shift();
+    }
+  }
+
+  renderSpectrumFrame(frame) {
     const activeColormap = this.previewColormap || this.settings.colormap;
 
-    if (this.state.isReassigned) {
+    if (frame.isReassigned) {
       printSpectrogram(
-        this.auxCtx, this.auxCanvas, this.state.spectrum, undefined,
+        this.auxCtx, this.auxCanvas, frame.spectrum, undefined,
         activeColormap, this.settings.dbRange, 
         this.state.staticSpectrogramIdx, false
       );
@@ -1490,13 +1619,16 @@ class AudioSpectrogram {
         this.audioCtx.sampleRate, this.settings.frequencyScale
       );
       printSpectrogram(
-        this.auxCtx, this.auxCanvas, this.state.spectrum, linearBinData,
+        this.auxCtx, this.auxCanvas, frame.spectrum, linearBinData,
         activeColormap, this.settings.dbRange, 
         this.state.staticSpectrogramIdx, false
       );
     }
 
-    this.state.staticSpectrogramIdx = idxWrapOver(this.state.staticSpectrogramIdx + 1, this.auxCanvas.width);
+    this.state.staticSpectrogramIdx = idxWrapOver(
+      this.state.staticSpectrogramIdx + 1, 
+      this.auxCanvas.width
+    );
   }
 
   animate() {

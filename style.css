@@ -3,10 +3,11 @@
     padding: 0;
     box-sizing: border-box;
     webkit-app-region: drag;
+    border-radius: 5px;
 }
 
 html {
-    border-radius: 5px;
+    background: rgba(0,0,0,0);
     overflow: hidden;
 }
 
@@ -29,7 +30,7 @@ html ::-webkit-scrollbar-thumb:active {
 }
 
 body {
-    background-color: rgba(0, 0, 0, 0);
+    background-color: rgba(0,0,0,0);
     color: #fff;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     border-radius: 5px;
@@ -41,6 +42,9 @@ body {
     height: 100vh;
     position: relative;
     -webkit-app-region: drag;
+    border-radius: 5px;
+    overflow: hidden;
+    background-color: #000;
 }
 
 #canvas {
@@ -48,6 +52,7 @@ body {
     height: 100%;
     display: block;
     pointer-events: none;
+    border-radius: 5px;
 }
 
 .exit-btn, .settings-btn, .pause-btn {
@@ -109,6 +114,7 @@ body {
     resize: horizontal;
     background: rgba(20, 20, 20, 0.79);
     backdrop-filter: blur(10px);
+    user-select: none;
 }
 
 #settingsPanel.open {
@@ -553,4 +559,75 @@ select option:hover {
     font-size: smaller;
     color: #6b6b6b;
     margin-bottom: 5px;
+}
+
+/* Custom Resize Handles */
+.resize-handle {
+  position: fixed;
+  z-index: 9999;
+  -webkit-app-region: no-drag;
+}
+
+.resize-handle-n {
+  top: 0;
+  left: 5px;
+  right: 5px;
+  height: 5px;
+  cursor: ns-resize;
+}
+
+.resize-handle-s {
+  bottom: 0;
+  left: 5px;
+  right: 5px;
+  height: 5px;
+  cursor: ns-resize;
+}
+
+.resize-handle-e {
+  right: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 5px;
+  cursor: ew-resize;
+}
+
+.resize-handle-w {
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 5px;
+  cursor: ew-resize;
+}
+
+.resize-handle-ne {
+  top: 0;
+  right: 0;
+  width: 10px;
+  height: 10px;
+  cursor: nesw-resize;
+}
+
+.resize-handle-nw {
+  top: 0;
+  left: 0;
+  width: 10px;
+  height: 10px;
+  cursor: nwse-resize;
+}
+
+.resize-handle-se {
+  bottom: 0;
+  right: 0;
+  width: 10px;
+  height: 10px;
+  cursor: nwse-resize;
+}
+
+.resize-handle-sw {
+  bottom: 0;
+  left: 0;
+  width: 10px;
+  height: 10px;
+  cursor: nesw-resize;
 }
