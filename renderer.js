@@ -115,7 +115,7 @@ function applyPinkNoiseWeighting(freq) {
   
   if (!LOG2_CACHE.has(freq)) {
     const octaves = Math.log2(freq / 1000);
-    const dbAdjustment = octaves * 3;
+    const dbAdjustment = octaves * 6;  // Changed from 3 to 6 for more obvious effect
     LOG2_CACHE.set(freq, 10 ** (dbAdjustment / 20));
   }
   
@@ -588,7 +588,12 @@ const COLORMAPS = {
 function getColormapColor(value, colormapName) {
   value = clamp(value, 0, 1);
   
-  const colormap = COLORMAPS[colormapName] || COLORMAPS.grayscale;
+  const colormap = COLORMAPS[colormapName] || COLORMAPS.greyscale || COLORMAPS.inferno;
+  
+  if (!colormap || !colormap.length) {
+    console.error(`Invalid colormap: ${colormapName}, falling back to greyscale`);
+    return 'rgb(128,128,128)';
+  }
   
   // Find interpolation range
   let i = 0;
@@ -620,38 +625,57 @@ function printSpectrogram(auxCtx, auxCanvas, data, linearBinData, colormap, dbRa
   const isLinearBins = linearBinData !== undefined;
   const actualLength = isLinearBins ? linearBinData.length : data.length;
   
+  // Shift canvas left first (before drawing new column)
+  if (auxCanvas.width > 0 && auxCanvas.height > 0) {
+    auxCtx.drawImage(auxCanvas, -1, 0);
+  }
+  
+  // Draw new column at the right edge
+  const xPos = auxCanvas.width - 1;
+  
+  // Batch drawing operations by color to reduce context switches
+  const drawOps = [];
+  
   for (let i = 0; i < actualLength; i++) {
     let mag = 0;
+    let start, delta;
     
     if (isLinearBins) {
       const bin = linearBinData[i];
       
-      // Simple max across bin range
       for (let idx = bin.lo; idx <= bin.hi; idx++) {
         const binIdx = idxWrapOver(idx, data.length);
         mag = Math.max(mag, data[binIdx]);
       }
       
-      const start = clamp(bin.start, 0, auxCanvas.height);
+      start = clamp(bin.start, 0, auxCanvas.height);
       const end = clamp(bin.end, 0, auxCanvas.height);
-      const delta = end - start;
-      const amp = ascale(mag, dbRange);
-      
-      auxCtx.fillStyle = getColormapColor(isFinite(amp) ? amp : 0, colormap);
-      auxCtx.fillRect(isStatic ? staticSpectrogramIdx + 1 : auxCanvas.width, auxCanvas.height - start, -1, -delta);
+      delta = end - start;
     } else {
-      const start = ((i / data.length * length) | 0);
+      start = ((i / data.length * length) | 0);
       const end = (((i + 1) / data.length * length) | 0);
-      const delta = end - start;
-      const amp = ascale(data[i], dbRange);
-      
-      auxCtx.fillStyle = getColormapColor(isFinite(amp) ? amp : 0, colormap);
-      auxCtx.fillRect(isStatic ? staticSpectrogramIdx + 1 : auxCanvas.width, auxCanvas.height - start, -1, -delta);
+      delta = end - start;
+      mag = data[i];
     }
+    
+    const amp = ascale(mag, dbRange);
+    const color = getColormapColor(isFinite(amp) ? amp : 0, colormap);
+    
+    drawOps.push({
+      color: color,
+      y: auxCanvas.height - start - delta,
+      height: delta
+    });
   }
   
-  if (auxCanvas.width > 0 && auxCanvas.height > 0) {
-    auxCtx.drawImage(auxCanvas, -1, 0);
+  // Draw all operations
+  let currentColor = null;
+  for (let i = 0; i < drawOps.length; i++) {
+    if (drawOps[i].color !== currentColor) {
+      currentColor = drawOps[i].color;
+      auxCtx.fillStyle = currentColor;
+    }
+    auxCtx.fillRect(xPos, drawOps[i].y, 1, drawOps[i].height);
   }
 }
 
@@ -660,7 +684,10 @@ function printSpectrogram(auxCtx, auxCanvas, data, linearBinData, colormap, dbRa
 class AudioSpectrogram {
   constructor() {
     this.canvas = document.getElementById('canvas');
-    this.ctx = this.canvas.getContext('2d', { alpha: false });
+    this.ctx = this.canvas.getContext('2d', { 
+      alpha: false,
+      desynchronized: this.isMac  // Reduces synchronization overhead on Mac
+    });
     this.ctx.imageSmoothingEnabled = false;
     this.statusEl = document.getElementById('status');
     this.settingsPanel = document.getElementById('settingsPanel');
@@ -668,12 +695,14 @@ class AudioSpectrogram {
 
     this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     this.analyser = this.audioCtx.createAnalyser();
+    // Detect platform for optimizations
+    this.isMac = navigator.platform.toLowerCase().includes('mac');
 
     const defaultSettings = {
       fftSize: 4096,
       hopSize: 64,
       // hopSizeRatio: 0.125,
-      scrollSpeed: 1.0,
+      scrollSpeed: this.isMac ? (window.devicePixelRatio > 1.5 ? 3.0 : 2.0) : 1.0,  // Higher on Retina
       useReassignment: true,
       colormap: 'inferno',
       dbRange: 50,
@@ -686,6 +715,7 @@ class AudioSpectrogram {
       alwaysOnTop: true,
       enableAGC: true,
       agcStrength: 1.0,
+      brightness: 0.44,
       sampleRate: this.audioCtx.sampleRate
     };
 
@@ -708,10 +738,15 @@ class AudioSpectrogram {
       gainSmoothingFactor: 0.95,
       frameBuffer: [],           // Stores computed frames
       frameSkipCounter: 0.0,     // Accumulates scroll speed
+      skipFrameCounter: 0,
     };
 
     this.auxCanvas = new OffscreenCanvas(this.canvas.width, this.canvas.height);
-    this.auxCtx = this.auxCanvas.getContext('2d', { alpha: false });
+    this.auxCtx = this.auxCanvas.getContext('2d', { 
+      alpha: false,
+      willReadFrequently: true,  // Optimizes for frequent readback
+      desynchronized: this.isMac
+    });
     this.auxCtx.imageSmoothingEnabled = false;
 
     this.setupUI();
@@ -784,6 +819,7 @@ class AudioSpectrogram {
     updateElement('noiseGate', this.settings.noiseGate, 'noiseGateValue', v => v + ' dB');
     updateElement('agcStrength', this.settings.agcStrength, 'agcStrengthValue', v => v.toFixed(2));
     updateElement('scrollSpeed', this.settings.scrollSpeed, 'scrollSpeedValue', v => v.toFixed(1) + 'x');
+    updateElement('brightness', this.settings.brightness, 'brightnessValue', v => Math.round(v * 100) + '%');
 
     // Update checkboxes
     const checkboxes = [
@@ -823,6 +859,8 @@ class AudioSpectrogram {
         }
       });
     }
+
+    this.updateBrightness();
   }
 
   async loadSettings(defaultSettings) {
@@ -857,7 +895,8 @@ class AudioSpectrogram {
         noiseGate: this.settings.noiseGate,
         alwaysOnTop: this.settings.alwaysOnTop,
         enableAGC: this.settings.enableAGC,
-        agcStrength: this.settings.agcStrength
+        agcStrength: this.settings.agcStrength,
+        brightness: this.settings.brightness
       };
       
       const result = await ipcRenderer.invoke('save-settings', settingsToSave);
@@ -1253,7 +1292,15 @@ class AudioSpectrogram {
           <label>Scroll Speed</label>
           <span class="setting-value" id="scrollSpeedValue">1.0x</span>
         </div>
-        <input type="range" id="scrollSpeed" min="0.1" max="3.0" step="0.1" value="1.0">
+        <input type="range" id="scrollSpeed" min="0.1" max="10.0" step="0.1" value="1.0">
+      </div>
+
+      <div class="setting-group">
+        <div class="setting-label">
+          <label>Brightness</label>
+          <span class="setting-value" id="brightnessValue">44%</span>
+        </div>
+        <input type="range" id="brightness" min="0.44" max="0.99" step="0.01" value="0.44">
       </div>
 
       <div class="button-group">
@@ -1300,6 +1347,14 @@ class AudioSpectrogram {
     this.attachSettingsListeners();
   }
 
+  updateBrightness() {
+    const blurLayer = document.getElementById('blur-layer');
+    if (blurLayer) {
+      const brightnessHex = Math.round(this.settings.brightness * 255).toString(16).padStart(2, '0');
+      blurLayer.style.backgroundImage = `linear-gradient(to right, #00000017 0 3rem, #ffffff${brightnessHex} 15rem 3rem)`;
+    }
+  }
+
   attachSettingsListeners() {
     const addListener = (id, event, handler) => {
       const el = document.getElementById(id);
@@ -1313,6 +1368,13 @@ class AudioSpectrogram {
       this.settings.fftSize = parseFloat(e.target.value);
       document.getElementById('fftSizeValue').textContent = e.target.value;
       this.updateFFTSize();
+      this.saveSettings();
+    });
+
+    addListener('brightness', 'input', (e) => {
+      this.settings.brightness = parseFloat(e.target.value);
+      document.getElementById('brightnessValue').textContent = Math.round(parseFloat(e.target.value) * 100) + '%';
+      this.updateBrightness();
       this.saveSettings();
     });
 
@@ -1405,6 +1467,7 @@ class AudioSpectrogram {
         alwaysOnTop: true,
         enableAGC: true,
         agcStrength: 1.0,
+        brightness: 0.44,
         sampleRate: this.audioCtx.sampleRate
       };
       
@@ -1418,7 +1481,7 @@ class AudioSpectrogram {
   }
 
   resizeCanvas() {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = window.devicePixelRatio || 1;  // Back to full resolution
     
     // Save the current aux canvas content before resizing
     const oldAuxCanvas = this.auxCanvas;
@@ -1482,7 +1545,7 @@ class AudioSpectrogram {
   }
 
   captureLoop() {
-    if (!this.state.isRunning) return;
+  if (!this.state.isRunning) return;
 
     const timeDomainData = new Float32Array(this.analyser.fftSize);
     this.analyser.getFloatTimeDomainData(timeDomainData);
@@ -1498,11 +1561,25 @@ class AudioSpectrogram {
       }
     }
 
-    requestAnimationFrame(() => this.captureLoop());
+    // Use setTimeout on Mac to reduce GPU pressure, RAF on Windows for smoother rendering
+    if (this.isMac) {
+      setTimeout(() => this.captureLoop(), 8);  // ~120fps max
+    } else {
+      requestAnimationFrame(() => this.captureLoop());
+    }
   }
 
   analyzeFrame() {
     if (this.isPaused) return;
+
+    // Skip frames on Mac with small FFT to maintain scroll speed
+    if (this.isMac && this.settings.fftSize < 4096) {
+      this.state.skipFrameCounter = (this.state.skipFrameCounter || 0) + 1;
+      if (this.state.skipFrameCounter % 2 === 0) {
+        // Process every other frame for FFTs below 4096
+        return;
+      }
+    }
     
     this.state.isReassigned = this.settings.useReassignment;
     const pcmData = renderOscilloscope(this.state.oscilloscopeBuffer, this.state.oscilloscopeIdx);
@@ -1580,8 +1657,9 @@ class AudioSpectrogram {
       isReassigned: this.state.isReassigned
     });
 
-    // Limit buffer size to prevent memory issues
-    while (this.state.frameBuffer.length > 200) {
+    // Limit buffer size - smaller on Mac for better performance
+    const maxBufferSize = this.isMac ? 50 : 200;
+    while (this.state.frameBuffer.length > maxBufferSize) {
       this.state.frameBuffer.shift();
     }
 
@@ -1598,8 +1676,9 @@ class AudioSpectrogram {
       this.renderSpectrumFrame(frame);
     }
 
-    // If scrolling very slowly, make sure we don't accumulate too many frames
-    if (this.state.frameBuffer.length > 100) {
+    // Prevent buffer overflow - more aggressive on Mac
+    const maxAccumulation = this.isMac ? 30 : 100;
+    if (this.state.frameBuffer.length > maxAccumulation) {
       this.state.frameBuffer.shift();
     }
   }
@@ -1632,14 +1711,22 @@ class AudioSpectrogram {
   }
 
   animate() {
-    this.ctx.fillStyle = '#000';
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    // Only clear and redraw if canvas exists and is valid
+    if (this.canvas.width > 0 && this.canvas.height > 0) {
+      this.ctx.fillStyle = '#000';
+      this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-    if (this.auxCanvas.width > 0 && this.auxCanvas.height > 0) {
-      this.ctx.drawImage(this.auxCanvas, 0, 0, this.canvas.width, this.canvas.height);
+      if (this.auxCanvas.width > 0 && this.auxCanvas.height > 0) {
+        this.ctx.drawImage(this.auxCanvas, 0, 0, this.canvas.width, this.canvas.height);
+      }
     }
 
-    requestAnimationFrame(() => this.animate());
+    // Throttle animation on Mac to reduce GPU competition
+    if (this.isMac) {
+      setTimeout(() => this.animate(), 16);  // ~60fps
+    } else {
+      requestAnimationFrame(() => this.animate());
+    }
   }
 }
 

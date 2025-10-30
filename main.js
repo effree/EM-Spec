@@ -109,7 +109,7 @@ app.on('ready', () => {
   mainWindowState.manage(mainWindow);
 
   mainWindow.loadFile('index.html');
-  mainWindow.webContents.openDevTools({mode:'detach'});
+  // mainWindow.webContents.openDevTools({mode:'detach'});
 
   mainWindow.webContents.on('did-finish-load', () => {
     ensureStateFile();

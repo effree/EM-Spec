@@ -47,7 +47,8 @@ npm start
 ## Settings
 
 - **FFT Size**: Select the FFT size manually *Default: 4096
-- **Hop Size**: Select the hop size manually *Default: 8192
+- **Speed Adjustment**: Increase and decrease speed of spectrogram scroll
+- **Brightness**: Adjust clarity of brightness to colormap
 - **Colormap**: Choose from 35 options *Default: Inferno
 - **dB Range**: Adjust dynamic range (30-120 dB)
 - **Gain**: Overall amplitude boost
