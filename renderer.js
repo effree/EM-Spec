@@ -1,40 +1,16 @@
 const { ipcRenderer } = require('electron');
 const { getLoopbackAudioMediaStream } = require('electron-audio-loopback');
 
-// ===== Auto Update Functions =====
-const updateStatus = document.getElementById('updateStatus');
-const updateButton = document.getElementById('updateButton');
-
-updateButton.style.display = 'none'; // hide initially
-
-ipcRenderer.on('update-available', (event, info) => {
-  updateStatus.innerText = `Update Available: ${info.version}`;
-  updateButton.style.display = 'inline';
+// Handle colormap preview
+ipcRenderer.on('preview-colormap', (event, colormap) => {
+  this.previewColormap = colormap;
 });
 
-ipcRenderer.on('update-not-available', () => {
-  updateStatus.innerText = 'Already up to date';
-  updateButton.style.display = 'none';
-});
-
-ipcRenderer.on('update-download-progress', (event, progress) => {
-  updateStatus.innerText = `Downloading: ${Math.round(progress.percent)}%`;
-});
-
-ipcRenderer.on('update-downloaded', () => {
-  updateStatus.innerText = 'Update downloaded! Click to restart.';
-  updateButton.style.display = 'inline';
-  updateButton.innerText = 'Install Update';
-});
-
-updateButton.addEventListener('click', async () => {
-  ipcRenderer.invoke('install-update');
-});
-
-ipcRenderer.on('update-error', (event, error) => {
-  updateStatus.innerText = `Update check failed: ${error}`;
-  updateButton.style.display = 'none';
-  console.error('Update error:', error);
+// Handle settings reset
+ipcRenderer.on('settings-reset', (event, defaultSettings) => {
+  this.settings = { ...defaultSettings };
+  this.updateFFTSize();
+  this.updateBrightness();
 });
 
 // ===== Utility Functions =====
@@ -114,8 +90,14 @@ function applyPinkNoiseWeighting(freq) {
   if (freq < 20) return 0;
   
   if (!LOG2_CACHE.has(freq)) {
+    // Limit cache size
+    if (LOG2_CACHE.size > 10000) {
+      const firstKey = LOG2_CACHE.keys().next().value;
+      LOG2_CACHE.delete(firstKey);
+    }
+    
     const octaves = Math.log2(freq / 1000);
-    const dbAdjustment = octaves * 6;  // Changed from 3 to 6 for more obvious effect
+    const dbAdjustment = octaves * 6;
     LOG2_CACHE.set(freq, 10 ** (dbAdjustment / 20));
   }
   
@@ -405,17 +387,13 @@ function generateSpectrumBarData(size, length, sampleRate, frequencyScale) {
   const max = 20000;
   const spectrogramBars = [];
   
-  // Iterate through each PIXEL instead of each bin
   for (let pixel = 0; pixel < size; pixel++) {
-    // What frequency range does this pixel represent?
     const pixelStart = pixel / size;
     const pixelEnd = (pixel + 1) / size;
     
-    // Convert from normalized position to frequency
     let freqStart, freqEnd;
     
     if (frequencyScale < 0.5) {
-      // Hybrid linear/log scale
       const linearAmount = 1 - (frequencyScale * 2);
       const logAmount = frequencyScale * 2;
       
@@ -424,22 +402,20 @@ function generateSpectrumBarData(size, length, sampleRate, frequencyScale) {
       freqEnd = (min + pixelEnd * (max - min)) * linearAmount + 
                 (min * Math.pow(max / min, pixelEnd)) * logAmount;
     } else {
-      // Pure log scale
       freqStart = min * Math.pow(max / min, pixelStart);
       freqEnd = min * Math.pow(max / min, pixelEnd);
     }
     
-    // Convert frequencies to fractional bin numbers
     const binStart = freqStart * length / sampleRate;
     const binEnd = freqEnd * length / sampleRate;
     
     spectrogramBars.push({
       lo: Math.floor(binStart),
       hi: Math.ceil(binEnd),
-      loFrac: binStart - Math.floor(binStart),  // Fractional part
-      hiFrac: Math.ceil(binEnd) - binEnd,       // Fractional part
-      start: pixel,
-      end: pixel + 1
+      loFrac: binStart - Math.floor(binStart),
+      hiFrac: Math.ceil(binEnd) - binEnd,
+      start: pixel,           // <-- Changed: use integer pixel positions
+      end: pixel + 1          // <-- Changed: exactly 1 pixel height
     });
   }
   
@@ -625,20 +601,17 @@ function printSpectrogram(auxCtx, auxCanvas, data, linearBinData, colormap, dbRa
   const isLinearBins = linearBinData !== undefined;
   const actualLength = isLinearBins ? linearBinData.length : data.length;
   
-  // Shift canvas left first (before drawing new column)
+  // Shift canvas left first
   if (auxCanvas.width > 0 && auxCanvas.height > 0) {
     auxCtx.drawImage(auxCanvas, -1, 0);
   }
   
-  // Draw new column at the right edge
   const xPos = auxCanvas.width - 1;
   
-  // Batch drawing operations by color to reduce context switches
-  const drawOps = [];
-  
+  // Instead of batching, draw directly to avoid gaps
   for (let i = 0; i < actualLength; i++) {
     let mag = 0;
-    let start, delta;
+    let yStart, yEnd;
     
     if (isLinearBins) {
       const bin = linearBinData[i];
@@ -648,34 +621,23 @@ function printSpectrogram(auxCtx, auxCanvas, data, linearBinData, colormap, dbRa
         mag = Math.max(mag, data[binIdx]);
       }
       
-      start = clamp(bin.start, 0, auxCanvas.height);
-      const end = clamp(bin.end, 0, auxCanvas.height);
-      delta = end - start;
+      yStart = Math.floor(bin.start);
+      yEnd = Math.ceil(bin.end);
     } else {
-      start = ((i / data.length * length) | 0);
-      const end = (((i + 1) / data.length * length) | 0);
-      delta = end - start;
+      yStart = Math.floor((i / data.length * length));
+      yEnd = Math.ceil(((i + 1) / data.length * length));
       mag = data[i];
     }
+    
+    // Ensure at least 1 pixel height
+    const height = Math.max(1, yEnd - yStart);
+    const y = auxCanvas.height - yEnd;
     
     const amp = ascale(mag, dbRange);
     const color = getColormapColor(isFinite(amp) ? amp : 0, colormap);
     
-    drawOps.push({
-      color: color,
-      y: auxCanvas.height - start - delta,
-      height: delta
-    });
-  }
-  
-  // Draw all operations
-  let currentColor = null;
-  for (let i = 0; i < drawOps.length; i++) {
-    if (drawOps[i].color !== currentColor) {
-      currentColor = drawOps[i].color;
-      auxCtx.fillStyle = currentColor;
-    }
-    auxCtx.fillRect(xPos, drawOps[i].y, 1, drawOps[i].height);
+    auxCtx.fillStyle = color;
+    auxCtx.fillRect(xPos, y, 1, height);
   }
 }
 
@@ -686,12 +648,23 @@ class AudioSpectrogram {
     this.canvas = document.getElementById('canvas');
     this.ctx = this.canvas.getContext('2d', { 
       alpha: false,
-      desynchronized: this.isMac  // Reduces synchronization overhead on Mac
+      desynchronized: this.isMac
     });
     this.ctx.imageSmoothingEnabled = false;
+
+    this.canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      console.warn('Canvas context lost');
+      this.isPaused = true;
+    });
+
+    this.canvas.addEventListener('webglcontextrestored', () => {
+      console.log('Canvas context restored');
+      this.resizeCanvas();
+      this.isPaused = false;
+    });
+
     this.statusEl = document.getElementById('status');
-    this.settingsPanel = document.getElementById('settingsPanel');
-    this.settingsContent = document.getElementById('settingsContent');
 
     this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     this.analyser = this.audioCtx.createAnalyser();
@@ -754,6 +727,35 @@ class AudioSpectrogram {
     this.animate();
     
     this.initSettings(defaultSettings);
+
+    // Listen for setting changes from settings window
+    ipcRenderer.on('setting-changed', (event, { key, value }) => {
+      this.settings[key] = value;
+      
+      // Handle specific setting changes
+      if (key === 'fftSize') {
+        this.updateFFTSize();
+      } else if (key === 'frequencyScale') {
+        SPECTRUM_BAR_CACHE.clear();
+      } else if (key === 'brightness') {
+        this.updateBrightness();
+      } else if (key === 'enableAGC' && !value) {
+        this.state.currentGain = 1.0;
+      }
+    });
+
+    // Handle colormap preview
+    ipcRenderer.on('preview-colormap', (event, colormap) => {
+      this.previewColormap = colormap;
+    });
+
+    // Handle settings reset
+    ipcRenderer.on('settings-reset', (event, defaultSettings) => {
+      this.settings = { ...defaultSettings };
+      this.updateFFTSize();
+      this.updateBrightness();
+      SPECTRUM_BAR_CACHE.clear();
+    });
   }
 
   updateFFTSize() {
@@ -914,11 +916,18 @@ class AudioSpectrogram {
     const pauseBtn = document.getElementById('pauseBtn');
     
     exitBtn?.addEventListener('click', () => window.close());
-    settingsBtn?.addEventListener('click', () => this.toggleSettings());
+    settingsBtn?.addEventListener('click', () => {
+      ipcRenderer.send('open-settings');
+      // ipcRenderer.send('create-settings-ui');
+      // console.log('Create Settings UI icp sent on click');
+    });
     pauseBtn?.addEventListener('click', () => this.togglePause());
     
     window.addEventListener('resize', () => this.resizeCanvas());
-    this.createSettingsUI();
+    
+    window.addEventListener('beforeunload', () => {
+      ipcRenderer.send('stop-mouse-tracking');
+    });
 
     this.freqHover = document.getElementById('freqHover');
     this.freqLine = document.getElementById('freqLine');
@@ -1031,102 +1040,6 @@ class AudioSpectrogram {
     });
   }
 
-  toggleSettings() {
-    this.settingsPanel?.classList.toggle('open');
-  }
-
-  setupColormapDropdown() {
-    const dropdownSelected = document.getElementById('colormapSelected');
-    const dropdownOptions = document.getElementById('colormapOptions');
-    
-    if (!dropdownSelected || !dropdownOptions) return;
-
-    // Initialize the selected option based on current settings
-    const options = dropdownOptions.querySelectorAll('.dropdown-option');
-    options.forEach(option => {
-      if (option.dataset.colormap === this.settings.colormap) {
-        option.classList.add('selected');
-      } else {
-        option.classList.remove('selected');
-      }
-    });
-
-    // Toggle dropdown
-    dropdownSelected.addEventListener('click', (e) => {
-      e.stopPropagation();
-      dropdownSelected.classList.toggle('open');
-      dropdownOptions.classList.toggle('open');
-    });
-
-    // Close dropdown when clicking outside
-    document.addEventListener('click', (e) => {
-      if (!dropdownSelected.contains(e.target) && !dropdownOptions.contains(e.target)) {
-        dropdownSelected.classList.remove('open');
-        dropdownOptions.classList.remove('open');
-        this.previewColormap = null;
-      }
-    });
-
-    // Handle option selection and hover
-    // const options = dropdownOptions.querySelectorAll('.dropdown-option');
-    options.forEach(option => {
-      const colormapValue = option.dataset.colormap;
-      
-      // Hover to preview
-      option.addEventListener('mouseenter', () => {
-        this.previewColormap = colormapValue;
-      });
-      
-      // Click to select
-      option.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.settings.colormap = colormapValue;
-        this.previewColormap = null;
-        
-        // Update selected display
-        const selectedName = dropdownSelected.querySelector('.colormap-name');
-        const selectedGradient = dropdownSelected.querySelector('.colormap-gradient');
-        if (selectedName) {
-          selectedName.textContent = colormapValue.charAt(0).toUpperCase() + colormapValue.slice(1);
-        }
-        if (selectedGradient) {
-          selectedGradient.style.background = this.generateColormapGradient(colormapValue);
-        }
-        
-        // Update value display
-        document.getElementById('colormapValue').textContent = 
-          colormapValue.charAt(0).toUpperCase() + colormapValue.slice(1);
-        
-        // Update selected state
-        options.forEach(opt => opt.classList.remove('selected'));
-        option.classList.add('selected');
-        
-        // Close dropdown
-        dropdownSelected.classList.remove('open');
-        dropdownOptions.classList.remove('open');
-        
-        this.saveSettings();
-      });
-    });
-
-    // Clear preview when leaving options area
-    dropdownOptions.addEventListener('mouseleave', () => {
-      this.previewColormap = null;
-    });
-  }
-
-  // Add method to generate CSS gradient from colormap
-  generateColormapGradient(colormapName) {
-    const colormap = COLORMAPS[colormapName];
-    if (!colormap) return 'linear-gradient(to right, #000, #fff)';
-    
-    const stops = colormap.map(([pos, r, g, b]) => {
-      return `rgb(${r},${g},${b}) ${pos * 100}%`;
-    }).join(', ');
-    
-    return `linear-gradient(to right, ${stops})`;
-  }
-
   togglePause() {
     this.isPaused = !this.isPaused;
     const pauseBtn = document.getElementById('pauseBtn');
@@ -1172,312 +1085,12 @@ class AudioSpectrogram {
     }
   }
 
-  createSettingsUI() {
-    // Generate colormap options HTML with gradient previews
-    const colormapOptions = Object.keys(COLORMAPS).sort().map(name => {
-      const gradient = this.generateColormapGradient(name);
-      const isSelected = this.settings.colormap === name ? 'selected' : '';
-      return `
-        <div class="dropdown-option ${isSelected}" data-colormap="${name}">
-          <div class="colormap-gradient" style="background: ${gradient}"></div>
-          <span class="colormap-name">${name.charAt(0).toUpperCase() + name.slice(1)}</span>
-        </div>
-      `;
-    }).join('');
-
-    const currentGradient = this.generateColormapGradient(this.settings.colormap);
-    const currentName = this.settings.colormap.charAt(0).toUpperCase() + this.settings.colormap.slice(1);
-
-    // Generate FFT size options (powers of 2 from 1024 to 8192)
-    const fftSizes = [1024, 2048, 4096, 8192];
-    const fftSizeOptions = fftSizes.map(size => 
-      `<option value="${size}" ${this.settings.fftSize === size ? 'selected' : ''}>${size}</option>`
-    ).join('');
-
-    this.settingsContent.innerHTML = `
-      <div class="setting-group">
-        <button id="resetSettingsBtn" class="reset-btn">Reset to Default</button>
-      </div>
-
-      <div class="fft-group">
-        <div class="setting-group">
-          <div class="setting-label">
-            <label>FFT Size</label>
-            <span class="setting-value" id="fftSizeValue">${this.settings.fftSize}</span>
-          </div>
-          <select id="fftSizeSelect" class="setting-dropdown">
-            ${fftSizeOptions}
-          </select>
-        </div>
-      </div>
-
-      <div class="setting-group">
-        <div class="setting-label">
-          <label>Colormap</label>
-          <span class="setting-value" id="colormapValue">${currentName}</span>
-        </div>
-        <div class="custom-dropdown">
-          <div class="dropdown-selected" id="colormapSelected">
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <div class="colormap-gradient" style="background: ${currentGradient}"></div>
-              <span class="colormap-name">${currentName}</span>
-            </div>
-            <div class="dropdown-arrow"></div>
-          </div>
-          <div class="dropdown-options" id="colormapOptions">
-            ${colormapOptions}
-          </div>
-        </div>
-        <p class="colormap-hint">Hover to preview, click to select</p>
-      </div>
-
-      <div class="setting-group">
-        <div class="setting-label">
-          <label>dB Range</label>
-          <span class="setting-value" id="dbRangeValue">120</span>
-        </div>
-        <input type="range" id="dbRange" min="30" max="120" value="120">
-      </div>
-
-      <div class="setting-group">
-        <div class="setting-label">
-          <label>Gain</label>
-          <span class="setting-value" id="gainValue">4.6</span>
-        </div>
-        <input type="range" id="gain" min="0.1" max="10" step="0.1" value="4.6">
-      </div>
-
-      <div class="setting-group">
-        <div class="setting-label">
-          <label>Freq Scale</label>
-          <span class="setting-value" id="freqScaleValue">1.0</span>
-        </div>
-        <input type="range" id="freqScale" min="0" max="1" step="0.1" value="1">
-      </div>
-
-      <div class="setting-group">
-        <div class="setting-label">
-          <label>Low End Boost</label>
-          <span class="setting-value" id="lowEndValue">5.0x</span>
-        </div>
-        <input type="range" id="lowEnd" min="1" max="10" step="0.1" value="5.0">
-      </div>
-
-      <div class="setting-group">
-        <div class="setting-label">
-          <label>Noise Gate</label>
-          <span class="setting-value" id="noiseGateValue">-80 dB</span>
-        </div>
-        <input type="range" id="noiseGate" min="-120" max="-40" step="5" value="-80">
-      </div>
-
-      <div class="setting-group">
-        <div class="setting-label">
-          <label>AGC Strength</label>
-          <span class="setting-value" id="agcStrengthValue">0.70</span>
-        </div>
-        <input type="range" id="agcStrength" min="0" max="1" step="0.05" value="0.7">
-      </div>
-
-      <div class="setting-group">
-        <div class="setting-label">
-          <label>Smoothing</label>
-          <span class="setting-value" id="smoothingValue">0.50</span>
-        </div>
-        <input type="range" id="smoothing" min="0" max="0.5" step="0.05" value="0.5">
-      </div>
-
-      <div class="setting-group">
-        <div class="setting-label">
-          <label>Scroll Speed</label>
-          <span class="setting-value" id="scrollSpeedValue">1.0x</span>
-        </div>
-        <input type="range" id="scrollSpeed" min="0.1" max="10.0" step="0.1" value="1.0">
-      </div>
-
-      <div class="setting-group">
-        <div class="setting-label">
-          <label>Brightness</label>
-          <span class="setting-value" id="brightnessValue">44%</span>
-        </div>
-        <input type="range" id="brightness" min="0.44" max="0.99" step="0.01" value="0.44">
-      </div>
-
-      <div class="button-group">
-
-        <div class="setting-group">
-          <div class="checkbox-group">
-            <label for="reassignedCheck">
-              <input type="checkbox" id="reassignedCheck" checked>
-              <span>Enhanced</span>
-            </label>
-          </div>
-        </div>
-
-        <div class="setting-group">
-          <div class="checkbox-group">
-            <label for="naturalCheck">
-              <input type="checkbox" id="naturalCheck" checked>
-              <span>Natural</span>
-            </label>
-          </div>
-        </div>
-
-        <div class="setting-group">
-          <div class="checkbox-group">
-            <label for="alwaysOnTopCheck">  
-              <input type="checkbox" id="alwaysOnTopCheck" checked>
-              <span>On Top</span>
-            </label>
-          </div>
-        </div>
-
-        <div class="setting-group">
-          <div class="checkbox-group">
-            <label for="agcCheck">
-              <input type="checkbox" id="agcCheck" checked>
-              <span>Auto Gain</span>
-            </label>
-          </div>
-        </div>
-
-      </div>
-    `;
-
-    this.attachSettingsListeners();
-  }
-
   updateBrightness() {
     const blurLayer = document.getElementById('blur-layer');
     if (blurLayer) {
       const brightnessHex = Math.round(this.settings.brightness * 255).toString(16).padStart(2, '0');
       blurLayer.style.backgroundImage = `linear-gradient(to right, #00000017 0 3rem, #ffffff${brightnessHex} 15rem 3rem)`;
     }
-  }
-
-  attachSettingsListeners() {
-    const addListener = (id, event, handler) => {
-      const el = document.getElementById(id);
-      if (el) el.addEventListener(event, handler);
-    };
-
-    // Custom colormap dropdown handlers
-    this.setupColormapDropdown();
-
-    document.getElementById('fftSizeSelect').addEventListener('change', (e) => {
-      this.settings.fftSize = parseFloat(e.target.value);
-      document.getElementById('fftSizeValue').textContent = e.target.value;
-      this.updateFFTSize();
-      this.saveSettings();
-    });
-
-    addListener('brightness', 'input', (e) => {
-      this.settings.brightness = parseFloat(e.target.value);
-      document.getElementById('brightnessValue').textContent = Math.round(parseFloat(e.target.value) * 100) + '%';
-      this.updateBrightness();
-      this.saveSettings();
-    });
-
-    addListener('scrollSpeed', 'input', (e) => {
-      this.settings.scrollSpeed = parseFloat(e.target.value);
-      document.getElementById('scrollSpeedValue').textContent = parseFloat(e.target.value).toFixed(1) + 'x';
-      this.saveSettings();
-    });
-
-    addListener('dbRange', 'input', (e) => {
-      this.settings.dbRange = parseFloat(e.target.value);
-      document.getElementById('dbRangeValue').textContent = e.target.value;
-      this.saveSettings();
-    });
-
-    addListener('gain', 'input', (e) => {
-      this.settings.gain = parseFloat(e.target.value);
-      document.getElementById('gainValue').textContent = parseFloat(e.target.value).toFixed(1);
-      this.saveSettings();
-    });
-
-    addListener('freqScale', 'input', (e) => {
-      this.settings.frequencyScale = parseFloat(e.target.value);
-      document.getElementById('freqScaleValue').textContent = parseFloat(e.target.value).toFixed(1);
-      SPECTRUM_BAR_CACHE.clear();
-      this.saveSettings();
-    });
-
-    addListener('lowEnd', 'input', (e) => {
-      this.settings.lowEndBoost = parseFloat(e.target.value);
-      document.getElementById('lowEndValue').textContent = parseFloat(e.target.value).toFixed(1) + 'x';
-      this.saveSettings();
-    });
-
-    addListener('noiseGate', 'input', (e) => {
-      this.settings.noiseGate = parseFloat(e.target.value);
-      document.getElementById('noiseGateValue').textContent = e.target.value + ' dB';
-      this.saveSettings();
-    });
-
-    addListener('smoothing', 'input', (e) => {
-      this.settings.smoothing = parseFloat(e.target.value);
-      document.getElementById('smoothingValue').textContent = parseFloat(e.target.value).toFixed(2);
-      this.saveSettings();
-    });
-
-    addListener('reassignedCheck', 'change', (e) => {
-      this.settings.useReassignment = e.target.checked;
-      this.saveSettings();
-    });
-
-    addListener('naturalCheck', 'change', (e) => {
-      this.settings.naturalWeighting = e.target.checked;
-      this.saveSettings();
-    });
-
-    addListener('alwaysOnTopCheck', 'change', (e) => {
-      this.settings.alwaysOnTop = e.target.checked;
-      ipcRenderer.send('set-always-on-top', e.target.checked);
-      this.saveSettings();
-    });
-
-    addListener('agcCheck', 'change', (e) => {
-      this.settings.enableAGC = e.target.checked;
-      if (!e.target.checked) this.state.currentGain = 1.0;
-      this.saveSettings();
-    });
-
-    addListener('agcStrength', 'input', (e) => {
-      this.settings.agcStrength = parseFloat(e.target.value);
-      document.getElementById('agcStrengthValue').textContent = parseFloat(e.target.value).toFixed(2);
-      this.saveSettings();
-    });
-
-    addListener('resetSettingsBtn', 'click', () => {
-      const defaultSettings = {
-        fftSize: 4096,
-        hopSize: 64,
-        // hopSizeRatio: 0.125,
-        scrollSpeed: 1.0,  // Added
-        useReassignment: true,
-        colormap: 'inferno',
-        dbRange: 50,
-        gain: 10.0,
-        naturalWeighting: true,
-        frequencyScale: 1.0,
-        lowEndBoost: 10.0,
-        smoothing: 0.35,
-        noiseGate: -60,
-        alwaysOnTop: true,
-        enableAGC: true,
-        agcStrength: 1.0,
-        brightness: 0.44,
-        sampleRate: this.audioCtx.sampleRate
-      };
-      
-      this.settings = { ...defaultSettings };
-      this.updateUIFromSettings();
-      this.updateFFTSize();
-      this.saveSettings();
-      
-      ipcRenderer.send('set-always-on-top', this.settings.alwaysOnTop);
-    });
   }
 
   resizeCanvas() {
@@ -1658,7 +1271,7 @@ class AudioSpectrogram {
     });
 
     // Limit buffer size - smaller on Mac for better performance
-    const maxBufferSize = this.isMac ? 50 : 200;
+    const maxBufferSize = Math.max(20, Math.min(200, 8192 / this.settings.fftSize * 50));
     while (this.state.frameBuffer.length > maxBufferSize) {
       this.state.frameBuffer.shift();
     }

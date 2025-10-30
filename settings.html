@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>EM-Spec Settings</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      overflow-y: auto;
+    }
+
+    html ::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+      background-color: transparent;
+      -webkit-border-radius: 100px;
+    }
+
+    html ::-webkit-scrollbar-thumb {
+      background-color: #424242;
+      -webkit-border-radius: 100px;
+      border: 2px solid transparent;
+      background-clip: content-box;
+    }
+
+    html ::-webkit-scrollbar-thumb:active {
+      background-color: #535353;
+    }
+
+    body {
+      background: #1a1a1a;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      padding: 20px;
+      transition: height 0.18s ease;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    body .setting-group {
+      margin-bottom: 0 !important;
+    }
+
+    .brightness {
+      margin-bottom: 18px;
+    }
+
+    h2 {
+      margin-bottom: 8px;
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .setting-group {
+      margin-bottom: 18px;
+    }
+
+    .setting-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+      font-size: 14px;
+      color: #ccc;
+    }
+
+    .setting-label label {
+      font-weight: 500;
+      font-size: 11px;
+      text-transform: uppercase;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    }
+
+    .setting-value {
+      font-size: 12px;
+      color: #888;
+      font-family: 'Monaco', monospace;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.1);
+      outline: none;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #00d4ff;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0, 212, 255, 0.4);
+    }
+
+    input[type="range"]::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #00d4ff;
+      cursor: pointer;
+      border: none;
+      box-shadow: 0 2px 8px rgba(0, 212, 255, 0.4);
+    }
+
+    select {
+      width: 100%;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 6px;
+      color: #fff;
+      font-size: 12px;
+      cursor: pointer;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      appearance: none;
+      background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      background-size: 16px;
+      padding-right: 32px;
+    }
+
+    select:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    select:focus {
+      outline: none;
+      border-color: rgba(0, 212, 255, 0.5);
+    }
+
+    select option {
+      background: #1a1a1a;
+      color: #fff;
+      padding: 8px;
+    }
+
+    .button-group, .slider-group, .fft-colormap-group, .header {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+
+    .header {
+      margin-bottom: 0;
+    }
+
+    .slider-group .setting-group, .fft-colormap-group .setting-group, .header h2, .header .updateSection {
+      flex: 1;
+      min-width: 200px;
+      margin: 0;
+    }
+
+    .button-group .setting-group {
+      flex: 1;
+      min-width: 120px;
+      margin: 0;
+    }
+
+    .fft-colormap-group .setting-group {
+      flex: 1;
+      margin: 0;
+    }
+
+    .checkbox-group {
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      overflow: hidden;
+    }
+
+    .checkbox-group label {
+      display: block;
+      cursor: pointer;
+    }
+
+    .checkbox-group label span {
+      display: block;
+      padding: 10px;
+      text-align: center;
+      background: rgba(255, 255, 255, 0.05);
+      color: #888;
+      transition: all 0.2s ease;
+      font-size: 13px;
+    }
+
+    .checkbox-group label input {
+      display: none;
+    }
+
+    .checkbox-group input:checked + span {
+      background: rgba(0, 212, 255, 0.2);
+      color: #00d4ff;
+    }
+
+    .checkbox-group:hover label span {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .reset-btn, #updateButton {
+      width: 100%;
+      padding: 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .reset-btn {
+      background: rgba(255, 59, 48, 0.15);
+      border: 1px solid rgba(255, 59, 48, 0.3);
+      color: #ff3b30;
+    }
+
+    .reset-btn:hover {
+      background: rgba(255, 59, 48, 0.25);
+      border-color: rgba(255, 59, 48, 0.5);
+    }
+
+    #updateButton {
+      background: rgba(48, 255, 48, 0.15);
+      border: 1px solid rgba(72, 255, 48, 0.3);
+      color: #5d9919;
+    }
+
+    #updateButton:hover {
+      background: rgba(72, 255, 48, 0.25);
+      border-color: rgba(65, 255, 48, 0.5);
+    }
+
+    .reset-btn:active, #updateButton:active {
+      transform: scale(0.98);
+    }
+
+    .custom-dropdown {
+      position: relative;
+      width: 100%;
+    }
+
+    .dropdown-selected {
+      width: 100%;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 6px;
+      color: #fff;
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: background 0.2s ease;
+    }
+
+    .dropdown-selected:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .dropdown-selected.open {
+      border-color: rgba(0, 212, 255, 0.5);
+    }
+
+    .dropdown-arrow {
+      width: 0;
+      height: 0;
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+      border-top: 5px solid #fff;
+      transition: transform 0.2s ease;
+    }
+
+    .dropdown-selected.open .dropdown-arrow {
+      transform: rotate(180deg);
+    }
+
+    .dropdown-options {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      margin-top: 4px;
+      background: rgba(20, 20, 20, 0.98);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      max-height: 200px;
+      overflow-y: auto;
+      z-index: 1000;
+      display: none;
+      backdrop-filter: blur(10px);
+    }
+
+    .dropdown-options.open {
+      display: block;
+    }
+
+    .dropdown-option {
+      padding: 8px 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      transition: background 0.15s ease;
+    }
+
+    .dropdown-option:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .dropdown-option.selected {
+      background: rgba(0, 212, 255, 0.15);
+    }
+
+    .colormap-gradient {
+      width: 60px;
+      height: 16px;
+      border-radius: 3px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      flex-shrink: 0;
+    }
+
+    .colormap-name {
+      flex: 1;
+      font-size: 12px;
+      color: #fff;
+    }
+
+    #updateSection {
+      margin-bottom: 18px;
+    }
+
+    #updateStatus {
+      font-size: 12px;
+      color: #6b6b6b;
+      margin-bottom: 8px;
+    }
+    .content {
+      transition: all 0.15s ease;
+    }
+  </style>
+</head>
+<body class="content">
+  <div class="header">
+    <h2>Settings</h2>
+    <div id="updateSection">
+      <p id="updateStatus">Checking for updates...</p>
+      <button id="updateButton" style="display: none;">Update</button>
+    </div>
+  </div>
+
+  <div id="settingsContent"></div>
+
+  <div class="setting-group">
+    <button id="resetSettingsBtn" class="reset-btn">Reset to Default</button>
+  </div>
+
+  <script>
+      require('./settings-renderer.js');
+  </script>
+</body>
+</html>
