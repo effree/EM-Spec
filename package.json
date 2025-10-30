@@ -11,74 +11,23 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win --x64",
-    "dist:mac": "electron-builder --mac"
+    "dist:mac": "electron-builder --mac",
+    "build-native": "node-gyp rebuild",
+    "rebuild-native": "electron-rebuild -f -w spectrogram_native",
+    "postinstall": "npm run build-native && npm run rebuild-native"
   },
   "dependencies": {
     "electron-audio-loopback": "^1.0.6",
     "electron-log": "^5.4.3",
     "electron-updater": "^6.6.2",
-    "electron-window-state": "^5.0.3"
+    "electron-window-state": "^5.0.3",
+    "node-addon-api": "^8.0.0"
   },
   "devDependencies": {
     "electron": "^38.2.2",
     "electron-builder": "^26.0.12",
+    "electron-rebuild": "^3.2.9",
+    "node-gyp": "^10.0.1",
     "rimraf": "6.0.1"
-  },
-  "resolutions": {},
-  "build": {
-    "appId": "com.effree.emspec",
-    "productName": "EM-Spec",
-    "compression": "maximum",
-    "directories": {
-      "buildResources": "assets",
-      "output": "dist"
-    },
-    "extraResources": [],
-    "extraFiles": [],
-    "files": [
-      "main.js",
-      "renderer.js",
-      "index.html",
-      "style.css",
-      "assets/**/*",
-      "package.json",
-      "!**/*.md",
-      "!**/LICENSE*",
-      "!node_modules/.cache/**"
-    ],
-    "asarUnpack": [
-      "**/node_modules/electron-audio-loopback/**"
-    ],
-    "removePackageScripts": true,
-    "win": {
-      "target": {
-        "target": "nsis",
-        "arch": [
-          "x64"
-        ]
-      },
-      "icon": "assets/icon.ico",
-      "electronLanguages": [
-        "en-US"
-      ]
-    },
-    "mac": {
-      "category": "public.app-category.music",
-      "target": [
-        "dmg"
-      ],
-      "icon": "assets/icon.icns",
-      "identity": null,
-      "electronLanguages": [
-        "en"
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "perMachine": false
-    },
-    "afterPack": "./build-scripts/remove-licenses.js",
-    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
   }
 }
