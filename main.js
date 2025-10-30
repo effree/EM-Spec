@@ -112,10 +112,6 @@ function createSettingsWindow() {
   // settingsWindow.webContents.openDevTools({mode:'detach'});
 
   settingsWindow.on('closed', () => {
-    if (mouseTrackingInterval) {
-      clearInterval(mouseTrackingInterval);
-      mouseTrackingInterval = null;
-    }
     settingsWindow = null;
   });
 }
@@ -299,33 +295,6 @@ ipcMain.handle('install-update', async () => {
   autoUpdater.quitAndInstall();
 });
 
-// Mouse position tracking for renderer
-let mouseTrackingInterval;
-
-ipcMain.on('start-mouse-tracking', () => {
-  if (mouseTrackingInterval) return;
-  
-  const { screen } = require('electron');
-  mouseTrackingInterval = setInterval(() => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      const mousePos = screen.getCursorScreenPoint();
-      const windowBounds = mainWindow.getBounds();
-      
-      mainWindow.webContents.send('mouse-position', {
-        x: mousePos.x - windowBounds.x,
-        y: mousePos.y - windowBounds.y
-      });
-    }
-  }, 16);
-});
-
-ipcMain.on('stop-mouse-tracking', () => {
-  if (mouseTrackingInterval) {
-    clearInterval(mouseTrackingInterval);
-    mouseTrackingInterval = null;
-  }
-});
-
 ipcMain.on('set-always-on-top', (event, shouldBeOnTop) => {
   if (mainWindow) {
     mainWindow.setAlwaysOnTop(shouldBeOnTop, "floating");
@@ -348,12 +317,7 @@ ipcMain.on('resize-window-bounds', (event, bounds) => {
 });
 
 app.on('window-all-closed', () => {
-  // Clean up everything
-  if (mouseTrackingInterval) {
-    clearInterval(mouseTrackingInterval);
-    mouseTrackingInterval = null;
-  }
-  
+ 
   fs.unwatchFile(liveStateFile);
   
   if (process.platform !== 'darwin') {
@@ -364,12 +328,6 @@ app.on('window-all-closed', () => {
 // ADD THIS NEW HANDLER:
 app.on('before-quit', () => {
   console.log('Cleaning up before quit...');
-  
-  // Stop mouse tracking
-  if (mouseTrackingInterval) {
-    clearInterval(mouseTrackingInterval);
-    mouseTrackingInterval = null;
-  }
   
   // Stop file watching
   fs.unwatchFile(liveStateFile);

@@ -167,12 +167,24 @@ function updateUIFromSettings() {
   }
 }
 
+let saveTimeout = null;
+
 function updateSetting(key, value) {
   if (!currentSettings) return;
   currentSettings[key] = value;
+  
+  // Send to main window immediately for live updates
   ipcRenderer.send('update-setting', { key, value });
+  
+  // But debounce the actual file save
+  if (saveTimeout) {
+    clearTimeout(saveTimeout);
+  }
+  saveTimeout = setTimeout(() => {
+    // Save happens after 500ms of no changes
+    saveTimeout = null;
+  }, 500);
 }
-
 // ===== UI Creation =====
 function createSettingsUI() {
   const settingsContent = document.getElementById('settingsContent');

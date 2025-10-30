@@ -1,18 +1,6 @@
 const { ipcRenderer } = require('electron');
 const { getLoopbackAudioMediaStream } = require('electron-audio-loopback');
 
-// Handle colormap preview
-ipcRenderer.on('preview-colormap', (event, colormap) => {
-  this.previewColormap = colormap;
-});
-
-// Handle settings reset
-ipcRenderer.on('settings-reset', (event, defaultSettings) => {
-  this.settings = { ...defaultSettings };
-  this.updateFFTSize();
-  this.updateBrightness();
-});
-
 // ===== Utility Functions =====
 const map = (x, min, max, targetMin, targetMax) => 
   (x - min) / (max - min) * (targetMax - targetMin) + targetMin;
@@ -596,51 +584,57 @@ function getColormapColor(value, colormapName) {
 
 // ===== Spectrogram Rendering =====
 
-function printSpectrogram(auxCtx, auxCanvas, data, linearBinData, colormap, dbRange, staticSpectrogramIdx, isStatic) {
-  const length = auxCanvas.height;
-  const isLinearBins = linearBinData !== undefined;
-  const actualLength = isLinearBins ? linearBinData.length : data.length;
+function printSpectrogram(auxCtx, auxCanvas, auxCtx2, auxCanvas2, data, linearBinData, colormap, dbRange, shouldShift) {
+  const height = auxCanvas.height;
+  const width = auxCanvas.width;
   
-  // Shift canvas left first
-  if (auxCanvas.width > 0 && auxCanvas.height > 0) {
-    auxCtx.drawImage(auxCanvas, -1, 0);
+  if (shouldShift && width > 0 && height > 0) {
+    // Copy from canvas1 to canvas2, shifted left by 1 pixel
+    auxCtx2.drawImage(auxCanvas, 1, 0, width - 1, height, 0, 0, width - 1, height);
+    
+    // Clear rightmost column on canvas2
+    auxCtx2.fillStyle = '#000000';
+    auxCtx2.fillRect(width - 1, 0, 1, height);
+    
+    // Swap: copy canvas2 back to canvas1
+    auxCtx.drawImage(auxCanvas2, 0, 0);
   }
   
-  const xPos = auxCanvas.width - 1;
+  const xPos = width - 1;
   
-  // Instead of batching, draw directly to avoid gaps
-  for (let i = 0; i < actualLength; i++) {
-    let mag = 0;
-    let yStart, yEnd;
-    
-    if (isLinearBins) {
-      const bin = linearBinData[i];
+  if (linearBinData) {
+    for (let pixelY = 0; pixelY < height; pixelY++) {
+      let mag = 0;
       
-      for (let idx = bin.lo; idx <= bin.hi; idx++) {
-        const binIdx = idxWrapOver(idx, data.length);
-        mag = Math.max(mag, data[binIdx]);
+      const binIndex = Math.floor((pixelY / height) * linearBinData.length);
+      if (binIndex < linearBinData.length) {
+        const bin = linearBinData[binIndex];
+        
+        for (let idx = bin.lo; idx <= bin.hi; idx++) {
+          const binIdx = idxWrapOver(idx, data.length);
+          mag = Math.max(mag, data[binIdx]);
+        }
       }
       
-      yStart = Math.floor(bin.start);
-      yEnd = Math.ceil(bin.end);
-    } else {
-      yStart = Math.floor((i / data.length * length));
-      yEnd = Math.ceil(((i + 1) / data.length * length));
-      mag = data[i];
+      const amp = ascale(mag, dbRange);
+      const color = getColormapColor(isFinite(amp) ? amp : 0, colormap);
+      
+      auxCtx.fillStyle = color;
+      auxCtx.fillRect(xPos, height - pixelY - 1, 1, 1);
     }
-    
-    // Ensure at least 1 pixel height
-    const height = Math.max(1, yEnd - yStart);
-    const y = auxCanvas.height - yEnd;
-    
-    const amp = ascale(mag, dbRange);
-    const color = getColormapColor(isFinite(amp) ? amp : 0, colormap);
-    
-    auxCtx.fillStyle = color;
-    auxCtx.fillRect(xPos, y, 1, height);
+  } else {
+    for (let pixelY = 0; pixelY < height; pixelY++) {
+      const binIndex = Math.floor((pixelY / height) * data.length);
+      const mag = data[binIndex] || 0;
+      
+      const amp = ascale(mag, dbRange);
+      const color = getColormapColor(isFinite(amp) ? amp : 0, colormap);
+      
+      auxCtx.fillStyle = color;
+      auxCtx.fillRect(xPos, height - pixelY - 1, 1, 1);
+    }
   }
 }
-
 // ===== Main AudioSpectrogram Class =====
 
 class AudioSpectrogram {
@@ -712,6 +706,7 @@ class AudioSpectrogram {
       frameBuffer: [],           // Stores computed frames
       frameSkipCounter: 0.0,     // Accumulates scroll speed
       skipFrameCounter: 0,
+      lastRenderTime: null
     };
 
     this.auxCanvas = new OffscreenCanvas(this.canvas.width, this.canvas.height);
@@ -721,6 +716,15 @@ class AudioSpectrogram {
       desynchronized: this.isMac
     });
     this.auxCtx.imageSmoothingEnabled = false;
+
+    // ADD THESE LINES HERE - Second buffer for double-buffering
+    this.auxCanvas2 = new OffscreenCanvas(this.canvas.width, this.canvas.height);
+    this.auxCtx2 = this.auxCanvas2.getContext('2d', { 
+      alpha: false,
+      willReadFrequently: true,
+      desynchronized: this.isMac
+    });
+    this.auxCtx2.imageSmoothingEnabled = false;
 
     this.setupUI();
     this.resizeCanvas();
@@ -735,6 +739,9 @@ class AudioSpectrogram {
       // Handle specific setting changes
       if (key === 'fftSize') {
         this.updateFFTSize();
+      } else if (key === 'scrollSpeed') {
+        // Adjust hopSize based on scroll speed for fast scrolling
+        this.settings.hopSize = Math.max(16, Math.floor(64 / Math.max(1, value)));
       } else if (key === 'frequencyScale') {
         SPECTRUM_BAR_CACHE.clear();
       } else if (key === 'brightness') {
@@ -918,56 +925,61 @@ class AudioSpectrogram {
     exitBtn?.addEventListener('click', () => window.close());
     settingsBtn?.addEventListener('click', () => {
       ipcRenderer.send('open-settings');
-      // ipcRenderer.send('create-settings-ui');
-      // console.log('Create Settings UI icp sent on click');
     });
     pauseBtn?.addEventListener('click', () => this.togglePause());
     
     window.addEventListener('resize', () => this.resizeCanvas());
     
-    window.addEventListener('beforeunload', () => {
-      ipcRenderer.send('stop-mouse-tracking');
-    });
-
     this.freqHover = document.getElementById('freqHover');
     this.freqLine = document.getElementById('freqLine');
     this.freqLabel = document.getElementById('freqLabel');
     
-    ipcRenderer.send('start-mouse-tracking');
+    const canvas = this.canvas;
+    let isOverButton = false;
+    let shiftPressed = false;
     
-    ipcRenderer.on('mouse-position', (event, mousePos) => {
-      const container = document.getElementById('container');
-      const rect = container.getBoundingClientRect();
-      
-      const clientX = mousePos.x;
-      const clientY = mousePos.y;
-      
-      const isInside = clientX >= 0 && clientX <= rect.width &&
-                      clientY >= 0 && clientY <= rect.height;
-      
-      const settingsOpen = this.settingsPanel?.classList.contains('open');
-      
-      let isOverButton = false;
-      const exitButton = document.getElementById('exitBtn');
-      const settingsButton = document.getElementById('settingsBtn');
-      const pauseButton = document.getElementById('pauseBtn');
-      
-      [exitButton, settingsButton, pauseButton].forEach(btn => {
-        if (btn) {
-          const btnRect = btn.getBoundingClientRect();
-          isOverButton = isOverButton || (
-            clientX >= btnRect.left && clientX <= btnRect.right &&
-            clientY >= btnRect.top && clientY <= btnRect.bottom
-          );
-        }
+    const buttons = [exitBtn, settingsBtn, pauseBtn];
+    
+    buttons.forEach(btn => {
+      btn?.addEventListener('mouseenter', () => {
+        isOverButton = true;
+        this.freqHover?.classList.remove('active');
       });
       
-      if (isInside && !settingsOpen && !isOverButton) {
+      btn?.addEventListener('mouseleave', () => {
+        isOverButton = false;
+      });
+    });
+    
+    // Track Shift key
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Shift') {
+        shiftPressed = true;
+        // Disable drag when shift is held
+        canvas.style.webkitAppRegion = 'no-drag';
+      }
+    });
+    
+    window.addEventListener('keyup', (e) => {
+      if (e.key === 'Shift') {
+        shiftPressed = false;
+        // Re-enable drag when shift is released
+        canvas.style.webkitAppRegion = 'drag';
+        this.freqHover?.classList.remove('active');
+      }
+    });
+    
+    canvas.addEventListener('mousemove', (e) => {
+      if (shiftPressed && !isOverButton) {
         this.freqHover?.classList.add('active');
-        this.updateFrequencyDisplay({ clientX, clientY });
+        this.updateFrequencyDisplay(e);
       } else {
         this.freqHover?.classList.remove('active');
       }
+    });
+    
+    canvas.addEventListener('mouseleave', () => {
+      this.freqHover?.classList.remove('active');
     });
 
     this.setupResizeHandles();
@@ -1094,21 +1106,9 @@ class AudioSpectrogram {
   }
 
   resizeCanvas() {
-    const dpr = window.devicePixelRatio || 1;  // Back to full resolution
+    const dpr = window.devicePixelRatio || 1;
     
-    // Save the current aux canvas content before resizing
-    const oldAuxCanvas = this.auxCanvas;
-    const oldWidth = oldAuxCanvas.width;
-    const oldHeight = oldAuxCanvas.height;
-    
-    // Create temporary canvas to store old content
-    const tempCanvas = new OffscreenCanvas(oldWidth, oldHeight);
-    const tempCtx = tempCanvas.getContext('2d', { alpha: false });
-    if (oldWidth > 0 && oldHeight > 0) {
-      tempCtx.drawImage(oldAuxCanvas, 0, 0);
-    }
-    
-    // Update main canvas size
+    // Main canvas at device pixel ratio
     this.canvas.width = window.innerWidth * dpr;
     this.canvas.height = window.innerHeight * dpr;
     this.canvas.style.width = window.innerWidth + 'px';
@@ -1116,20 +1116,34 @@ class AudioSpectrogram {
     
     this.ctx.setTransform(1, 0, 0, 1, 0, 0);
     
-    // Update aux canvas size
+    // Save old content
+    const oldAuxCanvas = this.auxCanvas;
+    const oldWidth = oldAuxCanvas.width;
+    const oldHeight = oldAuxCanvas.height;
+    
+    const tempCanvas = new OffscreenCanvas(oldWidth, oldHeight);
+    const tempCtx = tempCanvas.getContext('2d', { alpha: false });
+    if (oldWidth > 0 && oldHeight > 0) {
+      tempCtx.drawImage(oldAuxCanvas, 0, 0);
+    }
+    
+    // Resize BOTH aux canvases
     this.auxCanvas.width = this.canvas.width;
     this.auxCanvas.height = this.canvas.height;
     this.auxCtx.imageSmoothingEnabled = false;
     
-    // Restore the old content, scaled to new height
+    this.auxCanvas2.width = this.canvas.width;  // <-- Added
+    this.auxCanvas2.height = this.canvas.height;  // <-- Added
+    this.auxCtx2.imageSmoothingEnabled = false;  // <-- Added
+    
+    // Restore old content
     if (oldWidth > 0 && oldHeight > 0) {
       this.auxCtx.drawImage(tempCanvas, 
         0, 0, oldWidth, oldHeight,
-        0, 0, oldWidth, this.canvas.height
+        0, 0, this.canvas.width, this.canvas.height
       );
     }
     
-    // Clear caches on resize
     SPECTRUM_BAR_CACHE.clear();
   }
 
@@ -1158,25 +1172,42 @@ class AudioSpectrogram {
   }
 
   captureLoop() {
-  if (!this.state.isRunning) return;
+    if (!this.state.isRunning) return;
 
     const timeDomainData = new Float32Array(this.analyser.fftSize);
     this.analyser.getFloatTimeDomainData(timeDomainData);
 
+    // Copy all samples into oscilloscope buffer
     for (let i = 0; i < timeDomainData.length; i++) {
       this.state.oscilloscopeBuffer[this.state.oscilloscopeIdx] = timeDomainData[i];
       this.state.oscilloscopeIdx = idxWrapOver(this.state.oscilloscopeIdx + 1, this.settings.fftSize);
       this.state.sampleCounter++;
 
+      // Analyze at hop intervals
       if (this.state.sampleCounter >= this.settings.hopSize) {
-        this.analyzeFrame();
         this.state.sampleCounter = 0;
+        
+        // Calculate time since last render
+        const now = performance.now();
+        const timeSinceLastRender = this.state.lastRenderTime ? (now - this.state.lastRenderTime) : 0;
+        
+        // Calculate desired time between renders based on scroll speed
+        // At scroll speed 1.0, render approximately every 16ms (60fps)
+        // Adjust based on FFT size - larger FFTs need less frequent renders
+        const baseRenderInterval = 16; // ms
+        const fftSizeFactor = this.settings.fftSize / 4096; // normalize to 4096
+        const targetRenderInterval = (baseRenderInterval * fftSizeFactor) / this.settings.scrollSpeed;
+        
+        // Only render if enough time has passed
+        if (!this.state.lastRenderTime || timeSinceLastRender >= targetRenderInterval) {
+          this.analyzeFrame();
+          this.state.lastRenderTime = now;
+        }
       }
     }
 
-    // Use setTimeout on Mac to reduce GPU pressure, RAF on Windows for smoother rendering
     if (this.isMac) {
-      setTimeout(() => this.captureLoop(), 8);  // ~120fps max
+      setTimeout(() => this.captureLoop(), 8);
     } else {
       requestAnimationFrame(() => this.captureLoop());
     }
@@ -1184,15 +1215,6 @@ class AudioSpectrogram {
 
   analyzeFrame() {
     if (this.isPaused) return;
-
-    // Skip frames on Mac with small FFT to maintain scroll speed
-    if (this.isMac && this.settings.fftSize < 4096) {
-      this.state.skipFrameCounter = (this.state.skipFrameCounter || 0) + 1;
-      if (this.state.skipFrameCounter % 2 === 0) {
-        // Process every other frame for FFTs below 4096
-        return;
-      }
-    }
     
     this.state.isReassigned = this.settings.useReassignment;
     const pcmData = renderOscilloscope(this.state.oscilloscopeBuffer, this.state.oscilloscopeIdx);
@@ -1256,44 +1278,18 @@ class AudioSpectrogram {
       const invSmoothFactor = 1 - smoothFactor;
       
       for (let i = 0; i < spectrum.length; i++) {
-        // Use MAX of smoothed and current (peak-hold behavior)
         const smoothed = spectrum[i] * invSmoothFactor + 
                         this.state.prevSpectrum[i] * smoothFactor;
-        spectrum[i] = Math.max(spectrum[i], smoothed * 0.95); // Slight decay
+        spectrum[i] = Math.max(spectrum[i], smoothed * 0.95);
       }
     }
     this.state.prevSpectrum = new Float32Array(spectrum);
 
-    // Store the computed frame
-    this.state.frameBuffer.push({
+    // Render immediately (timing-controlled in captureLoop)
+    this.renderSpectrumFrame({
       spectrum: spectrum,
       isReassigned: this.state.isReassigned
     });
-
-    // Limit buffer size - smaller on Mac for better performance
-    const maxBufferSize = Math.max(20, Math.min(200, 8192 / this.settings.fftSize * 50));
-    while (this.state.frameBuffer.length > maxBufferSize) {
-      this.state.frameBuffer.shift();
-    }
-
-    // Display frames based on scroll speed
-    this.state.frameSkipCounter += this.settings.scrollSpeed;
-
-    while (this.state.frameSkipCounter >= 1.0) {
-      this.state.frameSkipCounter -= 1.0;
-      
-      const frame = this.state.frameBuffer.length > 1 
-        ? this.state.frameBuffer.shift() 
-        : { spectrum: spectrum, isReassigned: this.state.isReassigned };
-      
-      this.renderSpectrumFrame(frame);
-    }
-
-    // Prevent buffer overflow - more aggressive on Mac
-    const maxAccumulation = this.isMac ? 30 : 100;
-    if (this.state.frameBuffer.length > maxAccumulation) {
-      this.state.frameBuffer.shift();
-    }
   }
 
   renderSpectrumFrame(frame) {
@@ -1301,9 +1297,9 @@ class AudioSpectrogram {
 
     if (frame.isReassigned) {
       printSpectrogram(
-        this.auxCtx, this.auxCanvas, frame.spectrum, undefined,
-        activeColormap, this.settings.dbRange, 
-        this.state.staticSpectrogramIdx, false
+        this.auxCtx, this.auxCanvas, this.auxCtx2, this.auxCanvas2,  // <-- Added both canvases
+        frame.spectrum, undefined,
+        activeColormap, this.settings.dbRange, true
       );
     } else {
       const linearBinData = generateSpectrumBarData(
@@ -1311,9 +1307,9 @@ class AudioSpectrogram {
         this.audioCtx.sampleRate, this.settings.frequencyScale
       );
       printSpectrogram(
-        this.auxCtx, this.auxCanvas, frame.spectrum, linearBinData,
-        activeColormap, this.settings.dbRange, 
-        this.state.staticSpectrogramIdx, false
+        this.auxCtx, this.auxCanvas, this.auxCtx2, this.auxCanvas2,  // <-- Added both canvases
+        frame.spectrum, linearBinData,
+        activeColormap, this.settings.dbRange, true
       );
     }
 
@@ -1324,19 +1320,18 @@ class AudioSpectrogram {
   }
 
   animate() {
-    // Only clear and redraw if canvas exists and is valid
     if (this.canvas.width > 0 && this.canvas.height > 0) {
       this.ctx.fillStyle = '#000';
       this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
       if (this.auxCanvas.width > 0 && this.auxCanvas.height > 0) {
-        this.ctx.drawImage(this.auxCanvas, 0, 0, this.canvas.width, this.canvas.height);
+        // 1:1 copy, no scaling
+        this.ctx.drawImage(this.auxCanvas, 0, 0);  // <-- Removed scaling parameters
       }
     }
 
-    // Throttle animation on Mac to reduce GPU competition
     if (this.isMac) {
-      setTimeout(() => this.animate(), 16);  // ~60fps
+      setTimeout(() => this.animate(), 16);
     } else {
       requestAnimationFrame(() => this.animate());
     }
