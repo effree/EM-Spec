@@ -5,6 +5,10 @@ node_modules/
 dist/
 build/
 out/
+*.node
+
+# Node modules
+node_modules/
 
 # User data and settings
 settings.json

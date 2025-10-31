@@ -1,7 +1,37 @@
 const { ipcRenderer } = require('electron');
 const { getLoopbackAudioMediaStream } = require('electron-audio-loopback');
+const nativeBridge = require('./native-bridge');
+
+// Check if native addon is available
+const USE_NATIVE = nativeBridge.isNativeAvailable();
+// const USE_NATIVE = false
+console.log(USE_NATIVE ? '🚀 Using native C++ processing' : '📊 Using JavaScript processing');
 
 // ===== Utility Functions =====
+// Add near the top of renderer.js
+const PerformanceMonitor = {
+  samples: [],
+  maxSamples: 100,
+  
+  addSample(duration) {
+    this.samples.push(duration);
+    if (this.samples.length > this.maxSamples) {
+      this.samples.shift();
+    }
+  },
+  
+  getAverage() {
+    if (this.samples.length === 0) return 0;
+    const sum = this.samples.reduce((a, b) => a + b, 0);
+    return sum / this.samples.length;
+  },
+  
+  reset() {
+    this.samples = [];
+  }
+};
+
+
 const map = (x, min, max, targetMin, targetMax) => 
   (x - min) / (max - min) * (targetMax - targetMin) + targetMin;
 
@@ -303,12 +333,61 @@ function getWindow(size) {
 }
 
 function generateSpectrum(data, deltaWindow, gain, naturalWeighting, sampleRate, fftSize, lowEndBoost, noiseGateDB) {
+  const profileTimes = {};
+  let totalStart = performance.now();
+  
+  // Try native addon first
+  if (USE_NATIVE) {
+    try {
+      const options = {
+        gain: gain,
+        sampleRate: sampleRate,
+        fftSize: fftSize,
+        lowEndBoost: lowEndBoost,
+        noiseGate: noiseGateDB,
+        naturalWeighting: naturalWeighting,
+        deltaWindow: deltaWindow
+      };
+      
+      const nativeStart = performance.now();
+      const result = nativeBridge.processSpectrum(data, options);
+      profileTimes.nativeProcessing = performance.now() - nativeStart;
+      
+      // Convert to the format expected by the rest of the code
+      const convertStart = performance.now();
+      const complexFFT = new Array(fftSize);
+      for (let i = 0; i < fftSize; i++) {
+        complexFFT[i] = {
+          re: result.real[i],
+          im: result.imag[i],
+          magnitude: result.magnitudes[i],
+          phase: Math.atan2(result.imag[i], result.real[i])
+        };
+      }
+      profileTimes.conversion = performance.now() - convertStart;
+      profileTimes.total = performance.now() - totalStart;
+      
+      // Log profile every 100 calls
+      if (!this.profileCounter) this.profileCounter = 0;
+      this.profileCounter++;
+      if (this.profileCounter >= 100) {
+        console.log('Native Profile:', profileTimes);
+        this.profileCounter = 0;
+      }
+      
+      return complexFFT;
+    } catch (err) {
+      console.error('Native processing failed:', err);
+    }
+  }
+  
+  // JavaScript fallback with profiling
+  const windowStart = performance.now();
   const window = getWindow(data.length);
   const dataArray = new Float32Array(data.length);
   let norm = 0;
   
   if (deltaWindow) {
-    // Delta window mode
     for (let i = 0; i < data.length; i++) {
       const x1 = map(i - 0.5, 0, data.length - 1, -1, 1);
       const x2 = map(i + 0.5, 0, data.length - 1, -1, 1);
@@ -321,7 +400,6 @@ function generateSpectrum(data, deltaWindow, gain, naturalWeighting, sampleRate,
       norm += window[i];
     }
   } else {
-    // Standard window mode
     for (let i = 0; i < data.length; i++) {
       const sample = isFinite(data[i]) ? data[i] * gain : 0;
       dataArray[i] = sample * window[i];
@@ -329,15 +407,17 @@ function generateSpectrum(data, deltaWindow, gain, naturalWeighting, sampleRate,
     }
   }
   
-  // Normalize and calculate FFT
   const normFactor = norm > 0 ? (data.length / (norm * Math.SQRT2)) : 0;
   for (let i = 0; i < dataArray.length; i++) {
     dataArray[i] *= normFactor;
   }
+  profileTimes.windowing = performance.now() - windowStart;
   
+  const fftStart = performance.now();
   let complexFFT = calcComplexFFT(dataArray);
+  profileTimes.fft = performance.now() - fftStart;
   
-  // Apply natural weighting
+  const weightingStart = performance.now();
   if (naturalWeighting) {
     const freqPerBin = sampleRate / fftSize;
     for (let i = 0; i < complexFFT.length; i++) {
@@ -345,15 +425,28 @@ function generateSpectrum(data, deltaWindow, gain, naturalWeighting, sampleRate,
       complexFFT[i].magnitude *= applyPinkNoiseWeighting(freq);
     }
   }
+  profileTimes.weighting = performance.now() - weightingStart;
   
-  // Apply noise gate
+  const gateStart = performance.now();
   if (noiseGateDB > -120) {
     complexFFT = applyNoiseGate(complexFFT, noiseGateDB);
   }
+  profileTimes.noiseGate = performance.now() - gateStart;
   
-  // Apply low-end boost
+  const boostStart = performance.now();
   if (lowEndBoost > 1.0) {
     complexFFT = applyLowEndBoost(complexFFT, sampleRate, fftSize, lowEndBoost);
+  }
+  profileTimes.lowEndBoost = performance.now() - boostStart;
+  
+  profileTimes.total = performance.now() - totalStart;
+  
+  // Log profile every 100 calls
+  if (!this.profileCounterJS) this.profileCounterJS = 0;
+  this.profileCounterJS++;
+  if (this.profileCounterJS >= 100) {
+    console.log('JS Profile:', profileTimes);
+    this.profileCounterJS = 0;
   }
 
   return complexFFT;
@@ -444,11 +537,16 @@ function calcReassignedSpectrum(fft, freqs, bands, frequencyScale) {
 }
 
 function renderOscilloscope(data, oscilloscopeIdx) {
-  const dataset = new Float32Array(data.length);
   const len = data.length;
+  const dataset = new Float32Array(len);
   
-  for (let i = 0; i < len; i++) {
-    dataset[i] = data[idxWrapOver(i + oscilloscopeIdx - len, len)];
+  // More efficient copy
+  const startIdx = oscilloscopeIdx >= len ? 0 : oscilloscopeIdx;
+  const firstPartLen = len - startIdx;
+  
+  dataset.set(data.subarray(startIdx, len), 0);
+  if (startIdx > 0) {
+    dataset.set(data.subarray(0, startIdx), firstPartLen);
   }
   
   return dataset;
@@ -582,25 +680,51 @@ function getColormapColor(value, colormapName) {
   return `rgb(${r},${g},${b})`;
 }
 
+function getColormapColorRGB(value, colormapName) {
+  value = clamp(value, 0, 1);
+  
+  const colormap = COLORMAPS[colormapName] || COLORMAPS.inferno;
+  
+  if (!colormap || !colormap.length) {
+    return { r: 128, g: 128, b: 128 };
+  }
+  
+  // Find interpolation range
+  let i = 0;
+  while (i < colormap.length - 1 && value > colormap[i + 1][0]) {
+    i++;
+  }
+  
+  if (i === colormap.length - 1) {
+    const [, r, g, b] = colormap[i];
+    return { r, g, b };
+  }
+  
+  // Interpolate
+  const [pos1, r1, g1, b1] = colormap[i];
+  const [pos2, r2, g2, b2] = colormap[i + 1];
+  const t = (value - pos1) / (pos2 - pos1);
+  
+  return {
+    r: (r1 + (r2 - r1) * t) | 0,
+    g: (g1 + (g2 - g1) * t) | 0,
+    b: (b1 + (b2 - b1) * t) | 0
+  };
+}
+
 // ===== Spectrogram Rendering =====
 
-function printSpectrogram(auxCtx, auxCanvas, auxCtx2, auxCanvas2, data, linearBinData, colormap, dbRange, shouldShift) {
+function printSpectrogram(auxCtx, auxCanvas, auxCtx2, auxCanvas2, data, linearBinData, colormap, dbRange, shouldShift, spectrogramState) {
   const height = auxCanvas.height;
   const width = auxCanvas.width;
   
-  if (shouldShift && width > 0 && height > 0) {
-    // Copy from canvas1 to canvas2, shifted left by 1 pixel
-    auxCtx2.drawImage(auxCanvas, 1, 0, width - 1, height, 0, 0, width - 1, height);
-    
-    // Clear rightmost column on canvas2
-    auxCtx2.fillStyle = '#000000';
-    auxCtx2.fillRect(width - 1, 0, 1, height);
-    
-    // Swap: copy canvas2 back to canvas1
-    auxCtx.drawImage(auxCanvas2, 0, 0);
-  }
+  if (width === 0 || height === 0) return;
   
-  const xPos = width - 1;
+  // Draw new column at current position (circular buffer - no shifting needed!)
+  const xPos = spectrogramState.xPos;
+  
+  const columnData = auxCtx.createImageData(1, height);
+  const columnPixels = columnData.data;
   
   if (linearBinData) {
     for (let pixelY = 0; pixelY < height; pixelY++) {
@@ -617,10 +741,13 @@ function printSpectrogram(auxCtx, auxCanvas, auxCtx2, auxCanvas2, data, linearBi
       }
       
       const amp = ascale(mag, dbRange);
-      const color = getColormapColor(isFinite(amp) ? amp : 0, colormap);
+      const color = getColormapColorRGB(isFinite(amp) ? amp : 0, colormap);
       
-      auxCtx.fillStyle = color;
-      auxCtx.fillRect(xPos, height - pixelY - 1, 1, 1);
+      const pixelIndex = (height - pixelY - 1) * 4;
+      columnPixels[pixelIndex] = color.r;
+      columnPixels[pixelIndex + 1] = color.g;
+      columnPixels[pixelIndex + 2] = color.b;
+      columnPixels[pixelIndex + 3] = 255;
     }
   } else {
     for (let pixelY = 0; pixelY < height; pixelY++) {
@@ -628,16 +755,68 @@ function printSpectrogram(auxCtx, auxCanvas, auxCtx2, auxCanvas2, data, linearBi
       const mag = data[binIndex] || 0;
       
       const amp = ascale(mag, dbRange);
-      const color = getColormapColor(isFinite(amp) ? amp : 0, colormap);
+      const color = getColormapColorRGB(isFinite(amp) ? amp : 0, colormap);
       
-      auxCtx.fillStyle = color;
-      auxCtx.fillRect(xPos, height - pixelY - 1, 1, 1);
+      const pixelIndex = (height - pixelY - 1) * 4;
+      columnPixels[pixelIndex] = color.r;
+      columnPixels[pixelIndex + 1] = color.g;
+      columnPixels[pixelIndex + 2] = color.b;
+      columnPixels[pixelIndex + 3] = 255;
     }
   }
+  
+  // Draw new column
+  auxCtx.putImageData(columnData, xPos, 0);
+  
+  // Draw a black line one pixel ahead (creates the "scrolling" effect)
+  const nextXPos = (xPos + 1) % width;
+  auxCtx.fillStyle = '#000000';
+  auxCtx.fillRect(nextXPos, 0, 2, height);  // 2 pixels wide for clear separator
+  
+  // Advance position
+  spectrogramState.xPos = nextXPos;
 }
+
 // ===== Main AudioSpectrogram Class =====
 
 class AudioSpectrogram {
+  processSpectrumJS(pcmData, effectiveGain) {
+    const spectrumData = generateSpectrum(
+      pcmData, false, effectiveGain, this.settings.naturalWeighting, 
+      this.audioCtx.sampleRate, this.settings.fftSize, 
+      this.settings.lowEndBoost, this.settings.noiseGate
+    );
+
+    let spectrum;
+
+    if (this.settings.useReassignment) {
+      const auxSpectrum = generateSpectrum(
+        pcmData, true, effectiveGain, this.settings.naturalWeighting, 
+        this.audioCtx.sampleRate, this.settings.fftSize, 
+        this.settings.lowEndBoost, this.settings.noiseGate
+      );
+      
+      const magnitudes = new Float32Array(spectrumData.length);
+      for (let i = 0; i < spectrumData.length; i++) {
+        magnitudes[i] = spectrumData[i].magnitude;
+      }
+      
+      spectrum = calcReassignedSpectrum(
+        magnitudes,
+        calcReassignedFreqs(spectrumData, auxSpectrum, this.state.oscilloscopeBuffer.length, this.audioCtx.sampleRate),
+        this.canvas.width,
+        this.settings.frequencyScale
+      );
+    } else {
+      spectrum = new Float32Array(spectrumData.length);
+      for (let i = 0; i < spectrumData.length; i++) {
+        spectrum[i] = spectrumData[i].magnitude;
+      }
+    }
+    
+    return spectrum;
+  }
+
   constructor() {
     this.canvas = document.getElementById('canvas');
     this.ctx = this.canvas.getContext('2d', { 
@@ -645,6 +824,7 @@ class AudioSpectrogram {
       desynchronized: this.isMac
     });
     this.ctx.imageSmoothingEnabled = false;
+    this.spectrogramXPos = 0;
 
     this.canvas.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
@@ -706,8 +886,11 @@ class AudioSpectrogram {
       frameBuffer: [],           // Stores computed frames
       frameSkipCounter: 0.0,     // Accumulates scroll speed
       skipFrameCounter: 0,
-      lastRenderTime: null
+      lastRenderTime: null,
+      lastAnalysisTime: null
     };
+
+    this.spectrogramState = { xPos: 0 };
 
     this.auxCanvas = new OffscreenCanvas(this.canvas.width, this.canvas.height);
     this.auxCtx = this.auxCanvas.getContext('2d', { 
@@ -790,7 +973,7 @@ class AudioSpectrogram {
     this.state.prevSpectrum = [];
     SPECTRUM_BAR_CACHE.clear();
     
-    console.log(`FFT size updated to ${this.settings.fftSize}, analyser size: ${analyserSize}`);
+    // console.log(`FFT size updated to ${this.settings.fftSize}, analyser size: ${analyserSize}`);
   }
 
   async initSettings(defaultSettings) {
@@ -1177,31 +1360,27 @@ class AudioSpectrogram {
     const timeDomainData = new Float32Array(this.analyser.fftSize);
     this.analyser.getFloatTimeDomainData(timeDomainData);
 
-    // Copy all samples into oscilloscope buffer
     for (let i = 0; i < timeDomainData.length; i++) {
       this.state.oscilloscopeBuffer[this.state.oscilloscopeIdx] = timeDomainData[i];
       this.state.oscilloscopeIdx = idxWrapOver(this.state.oscilloscopeIdx + 1, this.settings.fftSize);
       this.state.sampleCounter++;
 
-      // Analyze at hop intervals
       if (this.state.sampleCounter >= this.settings.hopSize) {
         this.state.sampleCounter = 0;
         
-        // Calculate time since last render
+        // Always analyze at hop intervals
         const now = performance.now();
-        const timeSinceLastRender = this.state.lastRenderTime ? (now - this.state.lastRenderTime) : 0;
+        const timeSinceLastAnalysis = this.state.lastAnalysisTime ? (now - this.state.lastAnalysisTime) : 1000;
         
-        // Calculate desired time between renders based on scroll speed
-        // At scroll speed 1.0, render approximately every 16ms (60fps)
-        // Adjust based on FFT size - larger FFTs need less frequent renders
-        const baseRenderInterval = 16; // ms
-        const fftSizeFactor = this.settings.fftSize / 4096; // normalize to 4096
-        const targetRenderInterval = (baseRenderInterval * fftSizeFactor) / this.settings.scrollSpeed;
+        // Adaptive: only analyze if enough time has passed (prevent overload)
+        // At 2048 FFT: min 2ms between analyses
+        // At 4096 FFT: min 3ms between analyses  
+        // At 8192 FFT: min 5ms between analyses
+        const minAnalysisInterval = (this.settings.fftSize / 2048) * 2;
         
-        // Only render if enough time has passed
-        if (!this.state.lastRenderTime || timeSinceLastRender >= targetRenderInterval) {
+        if (timeSinceLastAnalysis >= minAnalysisInterval) {
           this.analyzeFrame();
-          this.state.lastRenderTime = now;
+          this.state.lastAnalysisTime = now;
         }
       }
     }
@@ -1216,11 +1395,18 @@ class AudioSpectrogram {
   analyzeFrame() {
     if (this.isPaused) return;
     
-    this.state.isReassigned = this.settings.useReassignment;
+    const profile = {};
+    const totalStart = performance.now();
+    
+    // Oscilloscope
+    let t = performance.now();
     const pcmData = renderOscilloscope(this.state.oscilloscopeBuffer, this.state.oscilloscopeIdx);
+    profile.oscilloscope = performance.now() - t;
 
     let effectiveGain = this.settings.gain;
     
+    // AGC
+    t = performance.now();
     if (this.settings.enableAGC) {
       const rms = calculateRMS(pcmData);
       const peak = calculatePeakLevel(pcmData);
@@ -1238,85 +1424,175 @@ class AudioSpectrogram {
     } else {
       this.state.currentGain = 1.0;
     }
+    profile.agc = performance.now() - t;
     
-    const spectrumData = generateSpectrum(
-      pcmData, false, effectiveGain, this.settings.naturalWeighting, 
-      this.audioCtx.sampleRate, this.settings.fftSize, 
-      this.settings.lowEndBoost, this.settings.noiseGate
-    );
-
     let spectrum;
-
-    if (this.state.isReassigned) {
-      const auxSpectrum = generateSpectrum(
-        pcmData, true, effectiveGain, this.settings.naturalWeighting, 
-        this.audioCtx.sampleRate, this.settings.fftSize, 
-        this.settings.lowEndBoost, this.settings.noiseGate
-      );
-      
-      const magnitudes = new Float32Array(spectrumData.length);
-      for (let i = 0; i < spectrumData.length; i++) {
-        magnitudes[i] = spectrumData[i].magnitude;
+    
+    // Spectrum processing
+    t = performance.now();
+    if (USE_NATIVE) {
+      try {
+        if (this.settings.useReassignment) {
+          const options = {
+            gain: effectiveGain,
+            sampleRate: this.audioCtx.sampleRate,
+            fftSize: this.settings.fftSize,
+            lowEndBoost: this.settings.lowEndBoost,
+            noiseGate: this.settings.noiseGate,
+            naturalWeighting: this.settings.naturalWeighting,
+            numBands: this.canvas.width,
+            frequencyScale: this.settings.frequencyScale
+          };
+          
+          spectrum = nativeBridge.processReassignedSpectrum(pcmData, options);
+          
+        } else {
+          const options = {
+            gain: effectiveGain,
+            sampleRate: this.audioCtx.sampleRate,
+            fftSize: this.settings.fftSize,
+            lowEndBoost: this.settings.lowEndBoost,
+            noiseGate: this.settings.noiseGate,
+            naturalWeighting: this.settings.naturalWeighting,
+            deltaWindow: false
+          };
+          
+          const result = nativeBridge.processSpectrum(pcmData, options);
+          spectrum = result.magnitudes;
+        }
+        
+      } catch (err) {
+        console.error('Native processing failed:', err);
+        spectrum = this.processSpectrumJS(pcmData, effectiveGain);
       }
-      
-      spectrum = calcReassignedSpectrum(
-        magnitudes,
-        calcReassignedFreqs(spectrumData, auxSpectrum, this.state.oscilloscopeBuffer.length, this.audioCtx.sampleRate),
-        this.canvas.width,
-        this.settings.frequencyScale
-      );
     } else {
-      spectrum = new Float32Array(spectrumData.length);
-      for (let i = 0; i < spectrumData.length; i++) {
-        spectrum[i] = spectrumData[i].magnitude;
-      }
+      spectrum = this.processSpectrumJS(pcmData, effectiveGain);
     }
+    profile.processing = performance.now() - t;
 
-    // Apply smoothing
+    // Smoothing
+    t = performance.now();
     if (this.settings.smoothing > 0 && this.state.prevSpectrum.length === spectrum.length) {
-      const smoothFactor = this.settings.smoothing;
-      const invSmoothFactor = 1 - smoothFactor;
-      
-      for (let i = 0; i < spectrum.length; i++) {
-        const smoothed = spectrum[i] * invSmoothFactor + 
-                        this.state.prevSpectrum[i] * smoothFactor;
-        spectrum[i] = Math.max(spectrum[i], smoothed * 0.95);
+      if (USE_NATIVE) {
+        try {
+          spectrum = nativeBridge.applySmoothing(spectrum, this.state.prevSpectrum, this.settings.smoothing);
+        } catch (err) {
+          console.error('Native smoothing failed, using JS fallback:', err);
+          const smoothFactor = this.settings.smoothing;
+          const invSmoothFactor = 1 - smoothFactor;
+          
+          for (let i = 0; i < spectrum.length; i++) {
+            const smoothed = spectrum[i] * invSmoothFactor + 
+                            this.state.prevSpectrum[i] * smoothFactor;
+            spectrum[i] = Math.max(spectrum[i], smoothed * 0.95);
+          }
+        }
+      } else {
+        const smoothFactor = this.settings.smoothing;
+        const invSmoothFactor = 1 - smoothFactor;
+        
+        for (let i = 0; i < spectrum.length; i++) {
+          const smoothed = spectrum[i] * invSmoothFactor + 
+                          this.state.prevSpectrum[i] * smoothFactor;
+          spectrum[i] = Math.max(spectrum[i], smoothed * 0.95);
+        }
       }
     }
     this.state.prevSpectrum = new Float32Array(spectrum);
+    profile.smoothing = performance.now() - t;
 
-    // Render immediately (timing-controlled in captureLoop)
-    this.renderSpectrumFrame({
-      spectrum: spectrum,
-      isReassigned: this.state.isReassigned
-    });
+    // SCROLL SPEED LOGIC: Render multiple columns if scroll speed is high
+    t = performance.now();
+    const scrollSpeed = this.settings.scrollSpeed;
+    
+    // How many columns should we render for this analysis?
+    // At 1x speed: render 1 column
+    // At 2x speed: render 2 columns
+    // At 10x speed: render 10 columns
+    const columnsToRender = Math.max(1, Math.round(scrollSpeed));
+    
+    for (let col = 0; col < columnsToRender; col++) {
+      this.renderSpectrumFrame({
+        spectrum: spectrum,
+        isReassigned: this.settings.useReassignment
+      });
+    }
+    
+    profile.render = performance.now() - t;
+    profile.columnsRendered = columnsToRender;
+
+    profile.total = performance.now() - totalStart;
+    profile.unaccounted = profile.total - (profile.oscilloscope + profile.agc + profile.processing + profile.smoothing + profile.render);
+    
+    // Log every 100 frames
+    if (!this.detailedPerfCounter) this.detailedPerfCounter = 0;
+    this.detailedPerfCounter++;
+    if (this.detailedPerfCounter >= 100) {
+      console.log(`DETAILED (${USE_NATIVE ? 'Native' : 'JS'}):`, {
+        osc: profile.oscilloscope.toFixed(2),
+        agc: profile.agc.toFixed(2),
+        proc: profile.processing.toFixed(2),
+        smooth: profile.smoothing.toFixed(2),
+        render: profile.render.toFixed(2),
+        cols: profile.columnsRendered,
+        total: profile.total.toFixed(2)
+      });
+      this.detailedPerfCounter = 0;
+    }
   }
 
   renderSpectrumFrame(frame) {
+    const t1 = performance.now();
+    
     const activeColormap = this.previewColormap || this.settings.colormap;
 
     if (frame.isReassigned) {
       printSpectrogram(
-        this.auxCtx, this.auxCanvas, this.auxCtx2, this.auxCanvas2,  // <-- Added both canvases
+        this.auxCtx, this.auxCanvas, this.auxCtx2, this.auxCanvas2,
         frame.spectrum, undefined,
-        activeColormap, this.settings.dbRange, true
+        activeColormap, this.settings.dbRange, true,
+        this.spectrogramState
       );
     } else {
+      const t2 = performance.now();
       const linearBinData = generateSpectrumBarData(
         this.canvas.height, this.settings.fftSize, 
         this.audioCtx.sampleRate, this.settings.frequencyScale
       );
+      const binDataTime = performance.now() - t2;
+      
+      const t3 = performance.now();
       printSpectrogram(
-        this.auxCtx, this.auxCanvas, this.auxCtx2, this.auxCanvas2,  // <-- Added both canvases
+        this.auxCtx, this.auxCanvas, this.auxCtx2, this.auxCanvas2,
         frame.spectrum, linearBinData,
-        activeColormap, this.settings.dbRange, true
+        activeColormap, this.settings.dbRange, true,
+        this.spectrogramState
       );
+      const printTime = performance.now() - t3;
+      
+      // Log occasionally
+      if (!this.renderPerfCounter) this.renderPerfCounter = 0;
+      this.renderPerfCounter++;
+      if (this.renderPerfCounter >= 100) {
+        console.log(`Render breakdown: binData=${binDataTime.toFixed(2)}ms, print=${printTime.toFixed(2)}ms`);
+        this.renderPerfCounter = 0;
+      }
     }
 
     this.state.staticSpectrogramIdx = idxWrapOver(
       this.state.staticSpectrogramIdx + 1, 
       this.auxCanvas.width
     );
+    
+    const renderTime = performance.now() - t1;
+    
+    // Log occasionally
+    if (!this.renderTotalCounter) this.renderTotalCounter = 0;
+    this.renderTotalCounter++;
+    if (this.renderTotalCounter >= 100) {
+      console.log(`Total renderSpectrumFrame: ${renderTime.toFixed(2)}ms`);
+      this.renderTotalCounter = 0;
+    }
   }
 
   animate() {
@@ -1325,8 +1601,23 @@ class AudioSpectrogram {
       this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
       if (this.auxCanvas.width > 0 && this.auxCanvas.height > 0) {
-        // 1:1 copy, no scaling
-        this.ctx.drawImage(this.auxCanvas, 0, 0);  // <-- Removed scaling parameters
+        const xPos = this.spectrogramState.xPos;
+        const width = this.auxCanvas.width;
+        
+        // Draw in two parts to create scrolling effect
+        // Draw right portion (from xPos+2 to end) at left side of display
+        this.ctx.drawImage(this.auxCanvas, 
+          xPos + 2, 0, width - xPos - 2, this.auxCanvas.height,
+          0, 0, width - xPos - 2, this.canvas.height
+        );
+        
+        // Draw left portion (from 0 to xPos) at right side of display
+        if (xPos > 0) {
+          this.ctx.drawImage(this.auxCanvas,
+            0, 0, xPos, this.auxCanvas.height,
+            width - xPos - 2, 0, xPos, this.canvas.height
+          );
+        }
       }
     }
 
