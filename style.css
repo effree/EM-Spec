@@ -165,20 +165,21 @@ body {
     background: rgba(20, 20, 20, 0.95);
     border: 1px solid rgba(0, 212, 255, 0.5);
     border-radius: 4px;
-    padding: 6px 10px;
+    padding: 5px;
     font-family: 'Monaco', monospace;
-    font-size: 12px;
+    font-size: 10px;
     color: #00d4ff;
     white-space: nowrap;
     backdrop-filter: blur(10px);
     transform: translateY(-50%);
     pointer-events: none;
+    min-width: 8rem;
 }
 
 #freqLabel .note {
-    font-size: 14px;
+    font-size: 12px;
     font-weight: bold;
-    margin-right: 8px;
+    margin-right: 4px;
 }
 
 #freqLabel .cents {

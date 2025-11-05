@@ -637,7 +637,7 @@ const COLORMAPS = {
   sepia: [[0.00, 20, 15, 10], [0.50, 150, 120, 90], [1.00, 240, 220, 200]],
   sharp: [[0.00, 0, 0, 50], [0.33, 100, 0, 200], [0.66, 200, 100, 255], [1.00, 255, 230, 255]],
   slimer: [[0.00, 10, 20, 10], [0.50, 150, 200, 150], [1.00, 240, 255, 240]],
-  smooth: [[0.00, 0, 0, 20], [0.33, 100, 50, 100], [0.66, 255, 120, 100], [1.00, 255, 230, 180]],
+  smooth: [[0.00, 0, 0, 0], [0.00, 0, 0, 20], [0.33, 100, 50, 100], [0.66, 255, 120, 100], [1.00, 255, 230, 180]],
   soft: [[0.00, 0, 0, 0], [0.25, 60, 50, 100], [0.50, 150, 120, 140], [0.75, 230, 180, 160], [1.00, 255, 255, 240]],
   space: [[0.00, 0, 0, 0], [0.50, 50, 40, 80], [1.00, 255, 200, 100]],
   sunrise: [[0.00, 0, 20, 40], [0.33, 50, 100, 180], [0.66, 255, 150, 120], [1.00, 255, 200, 200]],
@@ -719,8 +719,11 @@ function printSpectrogram(auxCtx, auxCanvas, auxCtx2, auxCanvas2, data, linearBi
   const width = auxCanvas.width;
   
   if (width === 0 || height === 0) return;
+
+  // REMOVED: Delete the entire cleanup section - it's causing the random black blocks
+  // The circular buffer naturally overwrites old data, so cleanup isn't needed
   
-  // Draw new column at current position (circular buffer - no shifting needed!)
+  // Draw new column at current position
   const xPos = spectrogramState.xPos;
   
   const columnData = auxCtx.createImageData(1, height);
@@ -767,12 +770,12 @@ function printSpectrogram(auxCtx, auxCanvas, auxCtx2, auxCanvas2, data, linearBi
   
   // Draw new column
   auxCtx.putImageData(columnData, xPos, 0);
-  
-  // Draw a black line one pixel ahead (creates the "scrolling" effect)
+
+  // Draw a black line just 3 pixels wide (enough to clear old data)
   const nextXPos = (xPos + 1) % width;
   auxCtx.fillStyle = '#000000';
-  auxCtx.fillRect(nextXPos, 0, 2, height);  // 2 pixels wide for clear separator
-  
+  auxCtx.fillRect(nextXPos, 0, 3, height);  // Only 3 pixels
+
   // Advance position
   spectrogramState.xPos = nextXPos;
 }
@@ -821,10 +824,9 @@ class AudioSpectrogram {
     this.canvas = document.getElementById('canvas');
     this.ctx = this.canvas.getContext('2d', { 
       alpha: false,
-      desynchronized: this.isMac
+      desynchronized: this.isMac  // <-- this.isMac doesn't exist yet, so move it down
     });
     this.ctx.imageSmoothingEnabled = false;
-    this.spectrogramXPos = 0;
 
     this.canvas.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
@@ -842,8 +844,15 @@ class AudioSpectrogram {
 
     this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     this.analyser = this.audioCtx.createAnalyser();
+    
     // Detect platform for optimizations
     this.isMac = navigator.platform.toLowerCase().includes('mac');
+
+    // ADD THESE LINES HERE - After this.isMac is defined:
+    this.MIN_SPECTROGRAM_WIDTH = 2048;
+    this.MIN_SPECTROGRAM_HEIGHT = 1024;
+    this.MAX_SPECTROGRAM_WIDTH = 4096;
+    this.MAX_SPECTROGRAM_HEIGHT = 2160;
 
     const defaultSettings = {
       fftSize: 4096,
@@ -890,24 +899,14 @@ class AudioSpectrogram {
       lastAnalysisTime: null
     };
 
-    this.spectrogramState = { xPos: 0 };
+    this.spectrogramState = { 
+      xPos: 0,
+      lastCleanup: 0,
+      maxAge: 10000  // Keep max 10 seconds of offscreen data (at 1 col/frame, ~600 frames/sec)
+    };
 
-    this.auxCanvas = new OffscreenCanvas(this.canvas.width, this.canvas.height);
-    this.auxCtx = this.auxCanvas.getContext('2d', { 
-      alpha: false,
-      willReadFrequently: true,  // Optimizes for frequent readback
-      desynchronized: this.isMac
-    });
-    this.auxCtx.imageSmoothingEnabled = false;
-
-    // ADD THESE LINES HERE - Second buffer for double-buffering
-    this.auxCanvas2 = new OffscreenCanvas(this.canvas.width, this.canvas.height);
-    this.auxCtx2 = this.auxCanvas2.getContext('2d', { 
-      alpha: false,
-      willReadFrequently: true,
-      desynchronized: this.isMac
-    });
-    this.auxCtx2.imageSmoothingEnabled = false;
+    // NOW call updateSpectrogramResolution to create canvases:
+    this.updateSpectrogramResolution();
 
     this.setupUI();
     this.resizeCanvas();
@@ -946,6 +945,87 @@ class AudioSpectrogram {
       this.updateBrightness();
       SPECTRUM_BAR_CACHE.clear();
     });
+  }
+
+  updateSpectrogramResolution() {
+    const dpr = window.devicePixelRatio || 1;
+    
+    const targetWidth = window.innerWidth * dpr;
+    const targetHeight = window.innerHeight * dpr;
+    
+    const needsResize = !this.auxCanvas || 
+                        Math.abs(this.auxCanvas.width - targetWidth) > 10 ||
+                        Math.abs(this.auxCanvas.height - targetHeight) > 10;
+    
+    if (needsResize) {
+      // console.log(`Spectrogram resolution: ${targetWidth}x${targetHeight}`);
+      
+      let oldCanvas = null;
+      let oldXPos = 0;
+      let oldWidth = 0;
+      let oldHeight = 0;
+      
+      if (this.auxCanvas && this.auxCanvas.width > 0) {
+        oldCanvas = new OffscreenCanvas(this.auxCanvas.width, this.auxCanvas.height);
+        const tempCtx = oldCanvas.getContext('2d', { alpha: false });
+        tempCtx.drawImage(this.auxCanvas, 0, 0);
+        oldXPos = this.spectrogramState.xPos;
+        oldWidth = this.auxCanvas.width;
+        oldHeight = this.auxCanvas.height;
+      }
+      
+      // Create new canvases
+      this.auxCanvas = new OffscreenCanvas(targetWidth, targetHeight);
+      this.auxCtx = this.auxCanvas.getContext('2d', { 
+        alpha: false,
+        willReadFrequently: true,
+        desynchronized: this.isMac
+      });
+      this.auxCtx.imageSmoothingEnabled = false;
+
+      this.auxCanvas2 = new OffscreenCanvas(targetWidth, targetHeight);
+      this.auxCtx2 = this.auxCanvas2.getContext('2d', { 
+        alpha: false,
+        willReadFrequently: true,
+        desynchronized: this.isMac
+      });
+      this.auxCtx2.imageSmoothingEnabled = false;
+      
+      // Copy with proper wrapping
+      if (oldCanvas && oldWidth > 0 && oldHeight > 0) {
+        const copyHeight = Math.min(oldHeight, targetHeight);
+        const SEPARATOR_WIDTH = 3;
+        
+        // Skip just the separator area (3px around xPos)
+        const safeStart = (oldXPos + SEPARATOR_WIDTH + 1) % oldWidth;
+        const safeCopyWidth = oldWidth - SEPARATOR_WIDTH - 1;
+        
+        // First section: from safe start to end of old buffer
+        const firstSectionWidth = Math.min(safeCopyWidth, oldWidth - safeStart);
+        if (firstSectionWidth > 0) {
+          this.auxCtx.drawImage(oldCanvas,
+            safeStart, 0, firstSectionWidth, copyHeight,
+            0, 0, firstSectionWidth, copyHeight
+          );
+        }
+        
+        // Second section: wrap around if needed
+        const remainingWidth = safeCopyWidth - firstSectionWidth;
+        if (remainingWidth > 0) {
+          this.auxCtx.drawImage(oldCanvas,
+            0, 0, remainingWidth, copyHeight,
+            firstSectionWidth, 0, remainingWidth, copyHeight
+          );
+        }
+        
+        // Set xPos to continue from where we left off
+        this.spectrogramState.xPos = safeCopyWidth % targetWidth;
+      } else {
+        this.spectrogramState.xPos = 0;
+      }
+      
+      SPECTRUM_BAR_CACHE.clear();
+    }
   }
 
   updateFFTSize() {
@@ -1299,35 +1379,8 @@ class AudioSpectrogram {
     
     this.ctx.setTransform(1, 0, 0, 1, 0, 0);
     
-    // Save old content
-    const oldAuxCanvas = this.auxCanvas;
-    const oldWidth = oldAuxCanvas.width;
-    const oldHeight = oldAuxCanvas.height;
-    
-    const tempCanvas = new OffscreenCanvas(oldWidth, oldHeight);
-    const tempCtx = tempCanvas.getContext('2d', { alpha: false });
-    if (oldWidth > 0 && oldHeight > 0) {
-      tempCtx.drawImage(oldAuxCanvas, 0, 0);
-    }
-    
-    // Resize BOTH aux canvases
-    this.auxCanvas.width = this.canvas.width;
-    this.auxCanvas.height = this.canvas.height;
-    this.auxCtx.imageSmoothingEnabled = false;
-    
-    this.auxCanvas2.width = this.canvas.width;  // <-- Added
-    this.auxCanvas2.height = this.canvas.height;  // <-- Added
-    this.auxCtx2.imageSmoothingEnabled = false;  // <-- Added
-    
-    // Restore old content
-    if (oldWidth > 0 && oldHeight > 0) {
-      this.auxCtx.drawImage(tempCanvas, 
-        0, 0, oldWidth, oldHeight,
-        0, 0, this.canvas.width, this.canvas.height
-      );
-    }
-    
-    SPECTRUM_BAR_CACHE.clear();
+    // Update spectrogram resolution to match new size
+    this.updateSpectrogramResolution();
   }
 
   async start() {
@@ -1440,12 +1493,11 @@ class AudioSpectrogram {
             lowEndBoost: this.settings.lowEndBoost,
             noiseGate: this.settings.noiseGate,
             naturalWeighting: this.settings.naturalWeighting,
-            numBands: this.canvas.width,
+            numBands: this.auxCanvas.width,  // Use buffer width
             frequencyScale: this.settings.frequencyScale
           };
           
           spectrum = nativeBridge.processReassignedSpectrum(pcmData, options);
-          
         } else {
           const options = {
             gain: effectiveGain,
@@ -1504,13 +1556,21 @@ class AudioSpectrogram {
     // SCROLL SPEED LOGIC: Render multiple columns if scroll speed is high
     t = performance.now();
     const scrollSpeed = this.settings.scrollSpeed;
+
+    // Calculate columns based on scroll speed AND window width
+    // Base calculation: at 1920px width, scrollSpeed directly controls columns
+    // At wider resolutions, automatically render more columns to maintain visual density
+    const baseWidth = 1920;
+    const widthFactor = Math.max(1, this.canvas.width / baseWidth);
     
-    // How many columns should we render for this analysis?
-    // At 1x speed: render 1 column
-    // At 2x speed: render 2 columns
-    // At 10x speed: render 10 columns
+    // Columns to render = scrollSpeed * widthFactor
+    // Examples:
+    // - 1920px wide @ 1x speed = 1 column
+    // - 3840px wide @ 1x speed = 2 columns (compensate for width)
+    // - 1920px wide @ 5x speed = 5 columns
+    // - 3840px wide @ 5x speed = 10 columns (5x speed * 2x width)
     const columnsToRender = Math.max(1, Math.round(scrollSpeed));
-    
+
     for (let col = 0; col < columnsToRender; col++) {
       this.renderSpectrumFrame({
         spectrum: spectrum,
@@ -1520,30 +1580,31 @@ class AudioSpectrogram {
     
     profile.render = performance.now() - t;
     profile.columnsRendered = columnsToRender;
+    profile.widthFactor = widthFactor.toFixed(2);
 
     profile.total = performance.now() - totalStart;
     profile.unaccounted = profile.total - (profile.oscilloscope + profile.agc + profile.processing + profile.smoothing + profile.render);
     
     // Log every 100 frames
-    if (!this.detailedPerfCounter) this.detailedPerfCounter = 0;
-    this.detailedPerfCounter++;
-    if (this.detailedPerfCounter >= 100) {
-      console.log(`DETAILED (${USE_NATIVE ? 'Native' : 'JS'}):`, {
-        osc: profile.oscilloscope.toFixed(2),
-        agc: profile.agc.toFixed(2),
-        proc: profile.processing.toFixed(2),
-        smooth: profile.smoothing.toFixed(2),
-        render: profile.render.toFixed(2),
-        cols: profile.columnsRendered,
-        total: profile.total.toFixed(2)
-      });
-      this.detailedPerfCounter = 0;
-    }
+    // if (!this.detailedPerfCounter) this.detailedPerfCounter = 0;
+    // this.detailedPerfCounter++;
+    // if (this.detailedPerfCounter >= 100) {
+    //   console.log(`DETAILED (${USE_NATIVE ? 'Native' : 'JS'}):`, {
+    //     osc: profile.oscilloscope.toFixed(2),
+    //     agc: profile.agc.toFixed(2),
+    //     proc: profile.processing.toFixed(2),
+    //     smooth: profile.smoothing.toFixed(2),
+    //     render: profile.render.toFixed(2),
+    //     cols: profile.columnsRendered,
+    //     widthFactor: profile.widthFactor,
+    //     canvasWidth: this.canvas.width,
+    //     total: profile.total.toFixed(2)
+    //   });
+    //   this.detailedPerfCounter = 0;
+    // }
   }
 
   renderSpectrumFrame(frame) {
-    const t1 = performance.now();
-    
     const activeColormap = this.previewColormap || this.settings.colormap;
 
     if (frame.isReassigned) {
@@ -1554,45 +1615,24 @@ class AudioSpectrogram {
         this.spectrogramState
       );
     } else {
-      const t2 = performance.now();
       const linearBinData = generateSpectrumBarData(
-        this.canvas.height, this.settings.fftSize, 
-        this.audioCtx.sampleRate, this.settings.frequencyScale
+        this.auxCanvas.height,  // Use current buffer height
+        this.settings.fftSize, 
+        this.audioCtx.sampleRate, 
+        this.settings.frequencyScale
       );
-      const binDataTime = performance.now() - t2;
-      
-      const t3 = performance.now();
       printSpectrogram(
         this.auxCtx, this.auxCanvas, this.auxCtx2, this.auxCanvas2,
         frame.spectrum, linearBinData,
         activeColormap, this.settings.dbRange, true,
         this.spectrogramState
       );
-      const printTime = performance.now() - t3;
-      
-      // Log occasionally
-      if (!this.renderPerfCounter) this.renderPerfCounter = 0;
-      this.renderPerfCounter++;
-      if (this.renderPerfCounter >= 100) {
-        console.log(`Render breakdown: binData=${binDataTime.toFixed(2)}ms, print=${printTime.toFixed(2)}ms`);
-        this.renderPerfCounter = 0;
-      }
     }
 
     this.state.staticSpectrogramIdx = idxWrapOver(
       this.state.staticSpectrogramIdx + 1, 
       this.auxCanvas.width
     );
-    
-    const renderTime = performance.now() - t1;
-    
-    // Log occasionally
-    if (!this.renderTotalCounter) this.renderTotalCounter = 0;
-    this.renderTotalCounter++;
-    if (this.renderTotalCounter >= 100) {
-      console.log(`Total renderSpectrumFrame: ${renderTime.toFixed(2)}ms`);
-      this.renderTotalCounter = 0;
-    }
   }
 
   animate() {
@@ -1602,21 +1642,88 @@ class AudioSpectrogram {
 
       if (this.auxCanvas.width > 0 && this.auxCanvas.height > 0) {
         const xPos = this.spectrogramState.xPos;
-        const width = this.auxCanvas.width;
+        const srcWidth = this.auxCanvas.width;
+        const srcHeight = this.auxCanvas.height;
         
-        // Draw in two parts to create scrolling effect
-        // Draw right portion (from xPos+2 to end) at left side of display
-        this.ctx.drawImage(this.auxCanvas, 
-          xPos + 2, 0, width - xPos - 2, this.auxCanvas.height,
-          0, 0, width - xPos - 2, this.canvas.height
-        );
+        const displayWidth = this.canvas.width;
+        const displayHeight = this.canvas.height;
         
-        // Draw left portion (from 0 to xPos) at right side of display
-        if (xPos > 0) {
-          this.ctx.drawImage(this.auxCanvas,
-            0, 0, xPos, this.auxCanvas.height,
-            width - xPos - 2, 0, xPos, this.canvas.height
-          );
+        this.ctx.imageSmoothingEnabled = false;
+        
+        if (displayWidth >= srcWidth) {
+          // Display wider - tile buffer from RIGHT edge backwards
+          const SEPARATOR_WIDTH = 3;
+          const usableWidth = srcWidth - SEPARATOR_WIDTH;
+          
+          // Calculate how many tiles we need
+          const tilesNeeded = Math.ceil(displayWidth / usableWidth);
+          
+          // Start drawing from the RIGHT edge, going LEFT
+          for (let r = 0; r < tilesNeeded; r++) {
+            // Calculate destination X (from right edge, going left)
+            const drawX = displayWidth - (r + 1) * usableWidth;
+            
+            // Skip the separator area (3px after write position)
+            const srcStart = (xPos + SEPARATOR_WIDTH + 1) % srcWidth;
+            const copyWidth = Math.min(usableWidth, displayWidth - Math.max(0, drawX));
+            
+            if (copyWidth <= 0) break;
+            
+            const actualDrawX = Math.max(0, drawX);
+            const skipFromCopy = actualDrawX - drawX; // If drawX is negative
+            
+            if (srcStart + copyWidth - skipFromCopy <= srcWidth) {
+              // No wrap
+              this.ctx.drawImage(this.auxCanvas, 
+                srcStart + skipFromCopy, 0, copyWidth - skipFromCopy, srcHeight,
+                actualDrawX, 0, copyWidth - skipFromCopy, srcHeight
+              );
+            } else {
+              // Wrap around
+              const firstPart = srcWidth - (srcStart + skipFromCopy);
+              if (firstPart > 0) {
+                this.ctx.drawImage(this.auxCanvas,
+                  srcStart + skipFromCopy, 0, firstPart, srcHeight,
+                  actualDrawX, 0, firstPart, srcHeight
+                );
+              }
+              
+              const secondPart = (copyWidth - skipFromCopy) - firstPart;
+              if (secondPart > 0) {
+                this.ctx.drawImage(this.auxCanvas,
+                  0, 0, secondPart, srcHeight,
+                  actualDrawX + firstPart, 0, secondPart, srcHeight
+                );
+              }
+            }
+          }
+        } else {
+          // Display narrower - show recent portion
+          const visibleWidth = displayWidth;
+          let startX = xPos - visibleWidth;
+          
+          if (startX < 0) {
+            const endWidth = Math.abs(startX);
+            const endStart = srcWidth + startX;
+            
+            this.ctx.drawImage(this.auxCanvas,
+              endStart, 0, endWidth, srcHeight,
+              0, 0, endWidth, srcHeight
+            );
+            
+            const beginWidth = visibleWidth - endWidth;
+            if (beginWidth > 0) {
+              this.ctx.drawImage(this.auxCanvas,
+                0, 0, beginWidth, srcHeight,
+                endWidth, 0, beginWidth, srcHeight
+              );
+            }
+          } else {
+            this.ctx.drawImage(this.auxCanvas,
+              startX, 0, visibleWidth, srcHeight,
+              0, 0, visibleWidth, srcHeight
+            );
+          }
         }
       }
     }

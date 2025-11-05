@@ -95,11 +95,12 @@ function createSettingsWindow() {
     y: settingsWindowState.y,
     width: 500,
     height: 610,
-    title: 'EM-Spec Settings',
+    title: 'Settings',
     parent: mainWindow,
     alwaysOnTop: true,
     autoHideMenuBar: true,
     resizable: false,
+    icon: path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : process.platform === 'darwin' ? 'icon.icns' : 'icon.png'),
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false
@@ -151,7 +152,7 @@ app.on('ready', () => {
   mainWindowState.manage(mainWindow);
 
   mainWindow.loadFile('index.html');
-  mainWindow.webContents.openDevTools({mode:'detach'});
+  // mainWindow.webContents.openDevTools({mode:'detach'});
 
   mainWindow.webContents.on('did-finish-load', () => {
     ensureStateFile();
