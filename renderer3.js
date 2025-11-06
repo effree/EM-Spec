@@ -379,8 +379,8 @@ class AudioSpectrogram {
     const targetHeight = window.innerHeight * dpr;
     
     const needsResize = !this.auxCanvas || 
-                        Math.abs(this.auxCanvas.width - targetWidth) > 0 ||
-                        Math.abs(this.auxCanvas.height - targetHeight) > 0;
+                        Math.abs(this.auxCanvas.width - targetWidth) > 10 ||
+                        Math.abs(this.auxCanvas.height - targetHeight) > 10;
     
     if (needsResize) {
       // console.log(`Spectrogram resolution: ${targetWidth}x${targetHeight}`);

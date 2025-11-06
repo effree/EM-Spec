@@ -68,6 +68,7 @@ body {
     opacity: 0;
     z-index: 100;
     -webkit-app-region: no-drag;
+    user-select: none;
 }
 
 #container:hover .exit-btn,
@@ -114,12 +115,15 @@ body {
     z-index: 5;
     opacity: 0;
     display: none;
+    user-select: none;
 }
 #container:hover #status {
     display: flex;
     opacity: 1;
     transition: opacity .35s ease;
 }
+
+/* seems to help with smoothing, may remove, but also used for brighten feature */
 #blur-layer {
     position: absolute;
     top: 0;
@@ -188,7 +192,7 @@ body {
     margin-left: 4px;
 }
 
-/* Custom Resize Handles */
+/* Custom Resize Handles - annoying windows issue */
 .resize-handle {
   position: fixed;
   z-index: 9999;
