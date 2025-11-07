@@ -5,6 +5,11 @@ directories:
   buildResources: assets
   output: dist
 
+publish:
+  provider: github
+  owner: effree
+  repo: EM-Spec
+
 files:
   - main.js
   - renderer.js
@@ -31,6 +36,7 @@ win:
       arch:
         - x64
   icon: assets/icon.ico
+  artifactName: "${productName}-Setup-${version}.${ext}"
 
 nsis:
   oneClick: false
@@ -43,5 +49,6 @@ mac:
   target: dmg
   icon: assets/icon.icns
   identity: null
+  artifactName: "${productName}-${version}-${arch}.${ext}"
 
 afterPack: ./build-scripts/remove-licenses.js
