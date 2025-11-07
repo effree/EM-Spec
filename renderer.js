@@ -175,7 +175,7 @@ function getColormapColorRGB(value, colormapName) {
 
 // ===== Spectrogram Rendering =====
 
-function printSpectrogram(auxCtx, auxCanvas, auxCtx2, auxCanvas2, data, linearBinData, colormap, dbRange, shouldShift, spectrogramState) {
+function printSpectrogram(auxCtx, auxCanvas, data, linearBinData, colormap, dbRange, shouldShift, spectrogramState) {
   const height = auxCanvas.height;
   const width = auxCanvas.width;
   
@@ -249,7 +249,7 @@ class AudioSpectrogram {
     this.canvas = document.getElementById('canvas');
     this.ctx = this.canvas.getContext('2d', { 
       alpha: false,
-      desynchronized: this.isMac  // <-- this.isMac doesn't exist yet, so move it down
+      desynchronized: true
     });
     this.ctx.imageSmoothingEnabled = false;
 
@@ -317,9 +317,7 @@ class AudioSpectrogram {
       targetRMS: 0.1,
       currentGain: 1.0,
       gainSmoothingFactor: 0.95,
-      frameBuffer: [],           // Stores computed frames
-      frameSkipCounter: 0.0,     // Accumulates scroll speed
-      skipFrameCounter: 0,
+      frameSkipCounter: 0.0,
       lastRenderTime: null,
       lastAnalysisTime: null
     };
@@ -403,18 +401,10 @@ class AudioSpectrogram {
       this.auxCanvas = new OffscreenCanvas(targetWidth, targetHeight);
       this.auxCtx = this.auxCanvas.getContext('2d', { 
         alpha: false,
-        willReadFrequently: true,
-        desynchronized: this.isMac
+        willReadFrequently: false,
+        desynchronized: true
       });
       this.auxCtx.imageSmoothingEnabled = false;
-
-      this.auxCanvas2 = new OffscreenCanvas(targetWidth, targetHeight);
-      this.auxCtx2 = this.auxCanvas2.getContext('2d', { 
-        alpha: false,
-        willReadFrequently: true,
-        desynchronized: this.isMac
-      });
-      this.auxCtx2.imageSmoothingEnabled = false;
       
       // Copy with proper wrapping
       if (oldCanvas && oldWidth > 0 && oldHeight > 0) {
@@ -988,7 +978,7 @@ class AudioSpectrogram {
 
     if (frame.isReassigned) {
       printSpectrogram(
-        this.auxCtx, this.auxCanvas, this.auxCtx2, this.auxCanvas2,
+        this.auxCtx, this.auxCanvas,
         frame.spectrum, undefined,
         activeColormap, this.settings.dbRange, true,
         this.spectrogramState
