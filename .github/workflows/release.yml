@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*.*.*'  # triggers on tags like v0.2.2
+      - 'v*.*.*'
 
 permissions:
   contents: write
@@ -16,10 +16,13 @@ jobs:
         include:
           - os: windows-latest
             arch: x64
+            platform: win
           - os: macos-latest
             arch: x64
+            platform: mac
           - os: macos-latest
             arch: arm64
+            platform: mac
 
     steps:
       - name: Checkout repository
@@ -34,7 +37,7 @@ jobs:
         run: npm ci
 
       - name: Build Electron app
-        run: npm run dist -- --${{ matrix.arch }} --publish never
+        run: electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --config .electron-builder.yml --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
