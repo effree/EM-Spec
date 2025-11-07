@@ -1,4 +1,3 @@
-// native-bridge.js
 const nativeAddon = require('./build/Release/spectrogram_native.node');
 
 module.exports = {

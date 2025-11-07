@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu } = require('electron');
 const { initMain } = require('electron-audio-loopback');
 const { autoUpdater } = require('electron-updater');
 autoUpdater.logger = require('electron-log');
@@ -113,7 +113,7 @@ function createSettingsWindow() {
   settingsWindowState.manage(settingsWindow);
 
   settingsWindow.loadFile('settings.html');
-  settingsWindow.webContents.openDevTools({mode:'detach'});
+  // settingsWindow.webContents.openDevTools({mode:'detach'});
 
   settingsWindow.on('closed', () => {
     settingsWindow = null;
@@ -166,6 +166,15 @@ app.on('ready', () => {
       console.log('Checking for updates...');
       autoUpdater.checkForUpdatesAndNotify();
     }, 2000);
+  });
+
+  const WM_INITMENU = 0x0116;
+  const menu = Menu.buildFromTemplate([{label: "🛈 Hold shift and move mouse over the spectrogram to view note and frequency information"}]);
+  mainWindow.hookWindowMessage(WM_INITMENU, () => {
+    mainWindow.setEnabled(false);
+    mainWindow.setEnabled(true);
+
+    menu.popup();
   });
 
 });
@@ -227,20 +236,20 @@ ipcMain.on('reset-settings', () => {
   const defaultSettings = {
     fftSize: 4096,
     hopSize: 64,
-    scrollSpeed: isMac ? 2.0 : 1.0,
+    scrollSpeed: isMac ? 2.9 : 1.7,
     useReassignment: true,
     colormap: 'inferno',
-    dbRange: 50,
-    gain: 10.0,
+    dbRange: 47,
+    gain: 8.1,
     naturalWeighting: true,
     frequencyScale: 1.0,
     lowEndBoost: 10.0,
-    smoothing: 0.35,
-    noiseGate: -60,
+    smoothing: 0.20,
+    noiseGate: -90,
     alwaysOnTop: true,
     enableAGC: true,
     agcStrength: 1.0,
-    brightness: 0.44
+    brightness: 0.70
   };
   
   try {
@@ -329,7 +338,6 @@ app.on('window-all-closed', () => {
   }
 });
 
-// ADD THIS NEW HANDLER:
 app.on('before-quit', () => {
   console.log('Cleaning up before quit...');
   

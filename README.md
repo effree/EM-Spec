@@ -1,4 +1,4 @@
-# EM-Spec 0.2.7
+# EM-Spec 0.3.1
 
 A real-time audio spectrogram visualizer built with Electron that captures desktop audio without additional audio routing software.  Using the reassignment method this spectrogram can enhance low-end clarity.  Logorithmic frequency scaling to emulate human hearing and linear frequency scaling to use standard values.
 
@@ -76,4 +76,5 @@ npm start
 
 Built with:
 - Electron
+- C++
 - electron-audio-loopback for system audio capture

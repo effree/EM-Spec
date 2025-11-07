@@ -180,9 +180,6 @@ function printSpectrogram(auxCtx, auxCanvas, data, linearBinData, colormap, dbRa
   const width = auxCanvas.width;
   
   if (width === 0 || height === 0) return;
-
-  // REMOVED: Delete the entire cleanup section - it's causing the random black blocks
-  // The circular buffer naturally overwrites old data, so cleanup isn't needed
   
   // Draw new column at current position
   const xPos = spectrogramState.xPos;
@@ -232,10 +229,10 @@ function printSpectrogram(auxCtx, auxCanvas, data, linearBinData, colormap, dbRa
   // Draw new column
   auxCtx.putImageData(columnData, xPos, 0);
 
-  // Draw a black line just 3 pixels wide (enough to clear old data)
+  // Draw a black line just 1 pixels wide (enough to clear old data)
   const nextXPos = (xPos + 1) % width;
   auxCtx.fillStyle = '#000000';
-  auxCtx.fillRect(nextXPos, 0, 3, height);  // Only 3 pixels
+  auxCtx.fillRect(nextXPos, 0, 1, height);  // Only 1 pixel
 
   // Advance position
   spectrogramState.xPos = nextXPos;
@@ -273,7 +270,6 @@ class AudioSpectrogram {
     // Detect platform for optimizations
     this.isMac = navigator.platform.toLowerCase().includes('mac');
 
-    // ADD THESE LINES HERE - After this.isMac is defined:
     this.MIN_SPECTROGRAM_WIDTH = 2048;
     this.MIN_SPECTROGRAM_HEIGHT = 1024;
     this.MAX_SPECTROGRAM_WIDTH = 4096;
@@ -282,7 +278,6 @@ class AudioSpectrogram {
     const defaultSettings = {
       fftSize: 4096,
       hopSize: 64,
-      // hopSizeRatio: 0.125,
       scrollSpeed: this.isMac ? (window.devicePixelRatio > 1.5 ? 3.0 : 2.0) : 1.0,  // Higher on Retina
       useReassignment: true,
       colormap: 'inferno',
@@ -328,7 +323,7 @@ class AudioSpectrogram {
       maxAge: 10000  // Keep max 10 seconds of offscreen data (at 1 col/frame, ~600 frames/sec)
     };
 
-    // NOW call updateSpectrogramResolution to create canvases:
+    // Call updateSpectrogramResolution to create canvases:
     this.updateSpectrogramResolution();
 
     this.setupUI();
@@ -345,8 +340,8 @@ class AudioSpectrogram {
       if (key === 'fftSize') {
         this.updateFFTSize();
       } else if (key === 'scrollSpeed') {
-        // Adjust hopSize based on scroll speed for fast scrolling
-        this.settings.hopSize = Math.max(16, Math.floor(64 / Math.max(1, value)));
+        // Adjust hopSize based on scroll speed for fast scrolling - disabled for now
+        // this.settings.hopSize = Math.max(16, Math.floor(64 / Math.max(1, value)));
       } else if (key === 'frequencyScale') {
         SPECTRUM_BAR_CACHE.clear();
       } else if (key === 'brightness') {
@@ -381,8 +376,6 @@ class AudioSpectrogram {
                         Math.abs(this.auxCanvas.height - targetHeight) > 0;
     
     if (needsResize) {
-      // console.log(`Spectrogram resolution: ${targetWidth}x${targetHeight}`);
-      
       let oldCanvas = null;
       let oldXPos = 0;
       let oldWidth = 0;

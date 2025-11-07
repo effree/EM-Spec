@@ -145,7 +145,6 @@ function updateSetting(key, value) {
     clearTimeout(saveTimeout);
   }
   saveTimeout = setTimeout(() => {
-    // This comment was here but no actual save - that's the bug!
     saveTimeout = null;
   }, 500);
 }
