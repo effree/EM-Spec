@@ -991,7 +991,7 @@ class AudioSpectrogram {
         this.settings.frequencyScale
       );
       printSpectrogram(
-        this.auxCtx, this.auxCanvas, this.auxCtx2, this.auxCanvas2,
+        this.auxCtx, this.auxCanvas,
         frame.spectrum, linearBinData,
         activeColormap, this.settings.dbRange, true,
         this.spectrogramState

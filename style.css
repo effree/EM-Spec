@@ -71,6 +71,10 @@ body {
     user-select: none;
 }
 
+:focus {
+    outline: none;
+}
+
 #container:hover .exit-btn,
 #container:hover .settings-btn,
 #container:hover .pause-btn {

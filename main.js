@@ -86,7 +86,7 @@ function createSettingsWindow() {
   let settingsWindowState = windowStateKeeper({
     file: 'settings-window-state.json',
     defaultWidth: 500,
-    defaultHeight: 610,
+    defaultHeight: 500,
     fullScreen: false
   });
 
@@ -94,11 +94,14 @@ function createSettingsWindow() {
     x: settingsWindowState.x,
     y: settingsWindowState.y,
     width: 500,
-    height: 610,
+    height: 500,
     title: 'Settings',
     parent: mainWindow,
     alwaysOnTop: true,
     autoHideMenuBar: true,
+    frame: false,
+    fullscreen: false,
+    minimizable: false,
     resizable: false,
     icon: path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : process.platform === 'darwin' ? 'icon.icns' : 'icon.png'),
     webPreferences: {
@@ -110,7 +113,7 @@ function createSettingsWindow() {
   settingsWindowState.manage(settingsWindow);
 
   settingsWindow.loadFile('settings.html');
-  // settingsWindow.webContents.openDevTools({mode:'detach'});
+  settingsWindow.webContents.openDevTools({mode:'detach'});
 
   settingsWindow.on('closed', () => {
     settingsWindow = null;
@@ -152,7 +155,7 @@ app.on('ready', () => {
   mainWindowState.manage(mainWindow);
 
   mainWindow.loadFile('index.html');
-  mainWindow.webContents.openDevTools({mode:'detach'});
+  // mainWindow.webContents.openDevTools({mode:'detach'});
 
   mainWindow.webContents.on('did-finish-load', () => {
     ensureStateFile();
