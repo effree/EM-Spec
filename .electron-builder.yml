@@ -17,6 +17,7 @@ files:
   - style.css
   - assets/**/*
   - package.json
+  - build/Release/*.node
   - "!**/*.md"
   - "!**/*.txt"
   - "!**/LICENSE*"
@@ -29,6 +30,9 @@ files:
   - "!**/.github/**"
   - "!**/examples/**"
   - "!node_modules/.cache"
+
+asarUnpack:
+  - "**/*.node"
 
 win:
   target:
