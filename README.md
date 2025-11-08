@@ -1,4 +1,4 @@
-# EM-Spec 0.3.4
+# EM-Spec 0.3.5
 
 A real-time audio spectrogram visualizer built with Electron that captures desktop audio without additional audio routing software.  Using the reassignment method this spectrogram can enhance low-end clarity.  Logorithmic frequency scaling to emulate human hearing and linear frequency scaling to use standard values.
 

@@ -1,6 +1,6 @@
 {
   "name": "em-spec",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Real-time audio spectrogram visualizer with enhanced low-end and reassignment method implementation",
   "author": "Jeffrey Meyer",
   "main": "main.js",
@@ -9,9 +9,9 @@
     "clean": "rimraf dist node_modules/.cache",
     "prebuild": "npm run clean",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder",
-    "dist:win": "electron-builder --win --x64",
-    "dist:mac": "electron-builder --mac",
+    "dist": "npm run build-native && electron-builder",
+    "dist:win": "npm run build-native && electron-builder --win --x64",
+    "dist:mac": "npm run build-native && electron-builder --mac",
     "build-native": "node-gyp rebuild",
     "rebuild-native": "electron-rebuild -f -w spectrogram_native",
     "postinstall": "npm run build-native && npm run rebuild-native"

@@ -1,6 +1,7 @@
 appId: com.effree.emspec
 productName: EM-Spec
 compression: maximum
+asar: false
 directories:
   buildResources: assets
   output: dist
@@ -11,10 +12,9 @@ publish:
   repo: EM-Spec
 
 files:
-  - main.js
-  - renderer.js
-  - index.html
-  - style.css
+  - "*.js"
+  - "*.html"
+  - "*.css"
   - assets/**/*
   - package.json
   - build/Release/*.node
@@ -30,9 +30,6 @@ files:
   - "!**/.github/**"
   - "!**/examples/**"
   - "!node_modules/.cache"
-
-asarUnpack:
-  - "**/*.node"
 
 win:
   target:

@@ -36,6 +36,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build native module
+        run: npm run build-native
+
+      - name: Rebuild for Electron
+        run: npm run rebuild-native
+
       - name: Build Electron app
         run: npx electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --config .electron-builder.yml --publish never
         env:

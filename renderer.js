@@ -3,6 +3,11 @@ const { getLoopbackAudioMediaStream } = require('electron-audio-loopback');
 const nativeBridge = require('./native-bridge');
 const { COLORMAPS } = require('./colormaps');
 
+window.onerror = function(message, source, lineno, colno, error) {
+  console.error('Window Error:', message, source, lineno, colno, error);
+  require('electron-log').error('Window Error:', message, source, lineno, colno, error);
+};
+
 const map = (x, min, max, targetMin, targetMax) => 
   (x - min) / (max - min) * (targetMax - targetMin) + targetMin;
 

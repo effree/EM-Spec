@@ -3,9 +3,7 @@ node_modules/
 
 # Electron build output
 dist/
-build/
 out/
-*.node
 
 # Node modules
 node_modules/

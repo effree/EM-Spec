@@ -10,6 +10,11 @@ const fs = require('fs');
 let mainWindow;
 let settingsWindow = null;
 
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  require('electron-log').error('Uncaught Exception:', error);
+});
+
 autoUpdater.on('error', (err) => {
   console.error('Update error:', err);
   // Send to settings window instead of main window
@@ -19,6 +24,35 @@ autoUpdater.on('error', (err) => {
 // Path to store settings
 const userDataPath = app.getPath('userData');
 const settingsPath = path.join(userDataPath, 'settings.json');
+
+// Default settings shared by all functions
+const isMac = process.platform === 'darwin';
+const defaultSettings = {
+  fftSize: 4096,
+  hopSize: 64,
+  scrollSpeed: isMac ? 2.9 : 1.7,
+  useReassignment: true,
+  colormap: 'inferno',
+  dbRange: 47,
+  gain: 8.1,
+  naturalWeighting: true,
+  frequencyScale: 1.0,
+  lowEndBoost: 10.0,
+  smoothing: 0.20,
+  noiseGate: -90,
+  alwaysOnTop: true,
+  enableAGC: true,
+  agcStrength: 1.0,
+  brightness: 0.70
+};
+
+// Ensure settings file exists
+function ensureSettingsFile() {
+  if (!fs.existsSync(settingsPath)) {
+    console.log('Settings file not found — creating with default values.');
+    fs.writeFileSync(settingsPath, JSON.stringify(defaultSettings, null, 2), 'utf8');
+  }
+}
 
 // Ableton Live State
 const liveStateFile = path.join(app.getPath('userData'), 'live_state.json');
@@ -70,6 +104,7 @@ ipcMain.handle('load-settings', () => {
 ipcMain.handle('save-settings', (event, settings) => {
   try {
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
+    console.log('settingsPath Variable:', settingsPath);
     return { success: true };
   } catch (err) {
     console.error('Failed to save settings:', err);
@@ -113,7 +148,7 @@ function createSettingsWindow() {
   settingsWindowState.manage(settingsWindow);
 
   settingsWindow.loadFile('settings.html');
-  // settingsWindow.webContents.openDevTools({mode:'detach'});
+  settingsWindow.webContents.openDevTools({mode:'detach'});
 
   settingsWindow.on('closed', () => {
     settingsWindow = null;
@@ -155,9 +190,10 @@ app.on('ready', () => {
   mainWindowState.manage(mainWindow);
 
   mainWindow.loadFile('index.html');
-  // mainWindow.webContents.openDevTools({mode:'detach'});
+  mainWindow.webContents.openDevTools({mode:'detach'});
 
   mainWindow.webContents.on('did-finish-load', () => {
+    ensureSettingsFile();
     ensureStateFile();
     watchStateFile();
     
@@ -232,29 +268,9 @@ ipcMain.on('preview-colormap', (event, colormap) => {
 
 // Reset settings
 ipcMain.on('reset-settings', () => {
-  const isMac = process.platform === 'darwin';
-  const defaultSettings = {
-    fftSize: 4096,
-    hopSize: 64,
-    scrollSpeed: isMac ? 2.9 : 1.7,
-    useReassignment: true,
-    colormap: 'inferno',
-    dbRange: 47,
-    gain: 8.1,
-    naturalWeighting: true,
-    frequencyScale: 1.0,
-    lowEndBoost: 10.0,
-    smoothing: 0.20,
-    noiseGate: -90,
-    alwaysOnTop: true,
-    enableAGC: true,
-    agcStrength: 1.0,
-    brightness: 0.70
-  };
-  
   try {
     fs.writeFileSync(settingsPath, JSON.stringify(defaultSettings, null, 2), 'utf8');
-    
+
     // Notify both windows
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('settings-reset', defaultSettings);
@@ -262,7 +278,7 @@ ipcMain.on('reset-settings', () => {
     if (settingsWindow && !settingsWindow.isDestroyed()) {
       settingsWindow.webContents.send('settings-updated', defaultSettings);
     }
-    
+
     if (mainWindow) {
       mainWindow.setAlwaysOnTop(defaultSettings.alwaysOnTop, "floating");
     }
