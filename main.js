@@ -148,7 +148,7 @@ function createSettingsWindow() {
   settingsWindowState.manage(settingsWindow);
 
   settingsWindow.loadFile('settings.html');
-  settingsWindow.webContents.openDevTools({mode:'detach'});
+  // settingsWindow.webContents.openDevTools({mode:'detach'});
 
   settingsWindow.on('closed', () => {
     settingsWindow = null;
@@ -190,7 +190,7 @@ app.on('ready', () => {
   mainWindowState.manage(mainWindow);
 
   mainWindow.loadFile('index.html');
-  mainWindow.webContents.openDevTools({mode:'detach'});
+  // mainWindow.webContents.openDevTools({mode:'detach'});
 
   mainWindow.webContents.on('did-finish-load', () => {
     ensureSettingsFile();
