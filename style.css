@@ -137,7 +137,7 @@ body {
     border-radius: 5px;
     background-image: linear-gradient(to right, #00000017 0 3rem, #ffffff70 15rem 3rem);
     mix-blend-mode: overlay;
-    backdrop-filter: blur(.5px);
+    /* backdrop-filter: blur(.5px); */
     pointer-events: none;
 }
 

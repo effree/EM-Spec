@@ -245,7 +245,7 @@ function createSettingsUI() {
           <label>Low End Boost</label>
           <span class="setting-value" id="lowEndValue">5.0x</span>
         </div>
-        <input type="range" id="lowEnd" min="1" max="10" step="0.1" value="5.0">
+        <input type="range" id="lowEnd" min="1" max="30" step="0.1" value="5.0">
       </div>
 
       <div class="setting-group">

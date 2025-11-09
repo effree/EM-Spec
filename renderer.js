@@ -52,8 +52,9 @@ function generateSpectrumBarData(size, length, sampleRate, frequencyScale) {
       freqEnd = (min + pixelEnd * (max - min)) * linearAmount + 
                 (min * Math.pow(max / min, pixelEnd)) * logAmount;
     } else {
-      freqStart = min * Math.pow(max / min, pixelStart);
-      freqEnd = min * Math.pow(max / min, pixelEnd);
+      const exponent = 1.5 + (frequencyScale * 0.5); // 1.5 to 2.0
+      freqStart = min * Math.pow(max / min, Math.pow(pixelStart, exponent));
+      freqEnd = min * Math.pow(max / min, Math.pow(pixelEnd, exponent));
     }
     
     const binStart = freqStart * length / sampleRate;
@@ -254,6 +255,7 @@ class AudioSpectrogram {
       desynchronized: true
     });
     this.ctx.imageSmoothingEnabled = false;
+    this.ctx.imageSmoothingQuality = 'low';
 
     this.canvas.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
@@ -373,8 +375,11 @@ class AudioSpectrogram {
   updateSpectrogramResolution() {
     const dpr = window.devicePixelRatio || 1;
     
-    const targetWidth = window.innerWidth * dpr;
-    const targetHeight = window.innerHeight * dpr;
+    // Try forcing DPR to 1 for sharper pixels
+    const effectiveDPR = 1; // Instead of using actual DPR
+    
+    const targetWidth = window.innerWidth * effectiveDPR;
+    const targetHeight = window.innerHeight * effectiveDPR;
     
     const needsResize = !this.auxCanvas || 
                         Math.abs(this.auxCanvas.width - targetWidth) > 0 ||
@@ -403,11 +408,12 @@ class AudioSpectrogram {
         desynchronized: true
       });
       this.auxCtx.imageSmoothingEnabled = false;
+      this.auxCtx.imageSmoothingQuality = 'low';
       
       // Copy with proper wrapping
       if (oldCanvas && oldWidth > 0 && oldHeight > 0) {
         const copyHeight = Math.min(oldHeight, targetHeight);
-        const SEPARATOR_WIDTH = 3;
+        const SEPARATOR_WIDTH = 1;
         
         // Skip just the separator area (3px around xPos)
         const safeStart = (oldXPos + SEPARATOR_WIDTH + 1) % oldWidth;
@@ -1004,6 +1010,8 @@ class AudioSpectrogram {
 
   animate() {
     if (this.canvas.width > 0 && this.canvas.height > 0) {
+      this.ctx.imageSmoothingEnabled = false; // Force it every frame
+
       this.ctx.fillStyle = '#000';
       this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
@@ -1019,7 +1027,7 @@ class AudioSpectrogram {
         
         if (displayWidth >= srcWidth) {
           // Display wider - tile buffer from RIGHT edge backwards
-          const SEPARATOR_WIDTH = 3;
+          const SEPARATOR_WIDTH = 1;
           const usableWidth = srcWidth - SEPARATOR_WIDTH;
           
           // Calculate how many tiles we need

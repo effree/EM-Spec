@@ -227,10 +227,13 @@ Napi::Value ProcessReassignedSpectrumOptimized(const Napi::CallbackInfo& info) {
         
         applyWindowFast(mainSamples, windowCache.getCosSquared());
         
-        std::vector<std::complex<double>> mainFFT(fftSize);
+        // Zero-pad to 2x or 4x size for better frequency resolution
+        size_t paddedSize = fftSize * 2; // Try 2x first, then 4x if needed
+        std::vector<std::complex<double>> mainFFT(paddedSize);
         for (size_t i = 0; i < fftSize; i++) {
             mainFFT[i] = std::complex<double>(mainSamples[i], 0.0);
         }
+        // Remaining elements are already zero-initialized
         fft(mainFFT);
         
         // Process delta window (reuse mainSamples buffer)
@@ -244,34 +247,102 @@ Napi::Value ProcessReassignedSpectrumOptimized(const Napi::CallbackInfo& info) {
         
         applyWindowFast(mainSamples, windowCache.getDelta());
         
-        std::vector<std::complex<double>> auxFFT(fftSize);
+        // Zero-pad to 2x or 4x size for better frequency resolution
+        // size_t paddedSize = fftSize * 2; // Try 2x first, then 4x if needed
+        std::vector<std::complex<double>> auxFFT(paddedSize);
         for (size_t i = 0; i < fftSize; i++) {
             auxFFT[i] = std::complex<double>(mainSamples[i], 0.0);
         }
+        // Remaining elements are already zero-initialized
         fft(auxFFT);
         
         // Calculate magnitudes and reassigned frequencies in single pass
         std::vector<double> spectrum(numBands, 0.0);
-        double freqPerBin = sampleRate / fftSize;
+        double freqPerBin = sampleRate / paddedSize;
         double correction = sampleRate / (2.0 * PI);
         
         // Pre-calculate processing parameters
         double pinkFactor = naturalWeighting ? 1.0 : 0.0;
-        double gateThreshold = std::pow(10.0, noiseGate / 20.0);
+        double baseGateThreshold = std::pow(10.0, noiseGate / 20.0);
         
-        for (size_t i = 0; i < fftSize; i++) {
+        // Pre-calculate low-end boost bins
+        double boostFactor = lowEndBoost - 1.0;
+        double bassBoost = 1.0 + boostFactor * 1.5;
+        size_t bin20 = (size_t)std::ceil(20.0 / freqPerBin);
+        size_t bin60 = (size_t)std::ceil(60.0 / freqPerBin);
+        size_t bin250 = (size_t)std::ceil(250.0 / freqPerBin);
+        size_t bin500 = (size_t)std::ceil(500.0 / freqPerBin);
+        
+        for (size_t i = 0; i < paddedSize; i++) {
             // Calculate magnitude
             double mag = std::abs(mainFFT[i]) / (fftSize / 2.0);
             
-            // Apply noise gate early (skip expensive calculations)
+            // Apply frequency-dependent noise gate
+            // Calculate frequency-dependent gate threshold
+            double freq = i * freqPerBin;
+            double gateThreshold = baseGateThreshold;
+
+            if (freq < 100.0) {
+                // VERY aggressive gating below 100Hz (rumble/noise)
+                gateThreshold = baseGateThreshold * 2.0; // 2x stronger
+            } else if (freq < 500.0) {
+                // Aggressive from 100-500 Hz
+                double t = (freq - 100.0) / 400.0;
+                gateThreshold = baseGateThreshold * (2.0 - t); // Gradually reduce to normal
+            } else if (freq < 2000.0) {
+                // Gradual transition from 500-2000 Hz
+                double t = (freq - 500.0) / 1500.0;
+                t = t * t;
+                gateThreshold = baseGateThreshold * (1.0 - 0.9 * t);
+            } else {
+                // High frequencies: minimal gating
+                gateThreshold = baseGateThreshold * 0.1;
+            }
+            
             if (mag < gateThreshold) continue;
             
-            // Apply natural weighting
+            // Apply natural weighting (A-weighting inspired, but gentler)
             if (naturalWeighting) {
                 double freq = i * freqPerBin;
                 if (freq < 20.0) continue;
-                double octaves = std::log2(freq / 1000.0);
-                mag *= std::pow(10.0, octaves * 0.3);
+                
+                // Gentler curve that preserves low-end better
+                if (freq < 200.0) {
+                    // Minimal compensation below 200Hz (preserve bass clarity)
+                    double t = (freq - 20.0) / 180.0;
+                    mag *= 0.7 + (0.3 * t); // Reduces by max 30% at 20Hz
+                } else if (freq < 1000.0) {
+                    // Gradual transition from 200-1000Hz
+                    double t = (freq - 200.0) / 800.0;
+                    mag *= 1.0 + (t * 0.15); // Slight boost in mid-range
+                } else {
+                    // Standard pink noise compensation above 1kHz
+                    double octaves = std::log2(freq / 1000.0);
+                    mag *= std::pow(10.0, octaves * 0.25); // Reduced from 0.3
+                }
+            }
+
+            // Gentle high-frequency rolloff (always applied, not just with natural weighting)
+            if (freq > 8000.0) {
+                double rolloffStart = 8000.0;
+                double rolloffEnd = 20000.0;
+                double t = (freq - rolloffStart) / (rolloffEnd - rolloffStart);
+                t = std::min(t, 1.0);
+                // Gentle -6dB rolloff at Nyquist
+                mag *= 1.0 - (0.5 * t);
+            }
+            
+            // Apply low-end boost per bin
+            if (lowEndBoost > 1.0) {
+                if (i >= bin20 && i < bin60) {
+                    double t = (double)(i - bin20) / (bin60 - bin20);
+                    mag *= 1.0 + boostFactor * 1.3 * (1.0 - t * 0.3);
+                } else if (i >= bin60 && i < bin250) {
+                    mag *= bassBoost;
+                } else if (i >= bin250 && i < bin500) {
+                    double t = (double)(i - bin250) / (bin500 - bin250);
+                    mag *= 1.0 + boostFactor * 0.8 * (1.0 - t);
+                }
             }
             
             // Calculate reassigned frequency
@@ -293,12 +364,20 @@ Napi::Value ProcessReassignedSpectrumOptimized(const Napi::CallbackInfo& info) {
             size_t binIdx = (size_t)(x * numBands);
             
             if (binIdx < numBands) {
-                spectrum[binIdx] = std::max(spectrum[binIdx], mag);
+                // Use the fractional part for interpolation
+                double x = logScale(reassignedFreq, frequencyScale) * numBands;
+                size_t bin1 = (size_t)x;
+                size_t bin2 = bin1 + 1;
+                double frac = x - bin1;
+                
+                if (bin1 < numBands) {
+                    spectrum[bin1] += mag * (1.0 - frac);
+                }
+                if (bin2 < numBands) {
+                    spectrum[bin2] += mag * frac;
+                }
             }
         }
-        
-        // Apply low-end boost (on final spectrum, much faster)
-        applyLowEndBoost(spectrum, sampleRate / numBands, lowEndBoost);
         
         // Return result
         Napi::Float32Array result = Napi::Float32Array::New(env, numBands);
