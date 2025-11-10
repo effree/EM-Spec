@@ -2,7 +2,7 @@
 
 Real-time audio spectrogram visualizer with enhanced low-end and reassignment method implementation.
 
-![EM-Spec Screenshot](assets/screenshot.png)
+![EM-Spec Spectrogram](assets/screenshot.png) ![EM-Spec Settings](assets/screenshot-settings.png)
 
 ## Features
 
