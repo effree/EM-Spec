@@ -53,6 +53,12 @@ Download `EM-Spec-[version]-[arch].dmg`, open it, and drag EM-Spec to your Appli
 
 EM-Spec automatically checks for updates on startup. When an update is available, you'll be notified in the settings window.
 
+## Ableton Live Integration
+
+EM-Spec includes a Max for Live device that automatically shows/hides the spectrogram window based on Ableton's Info View visibility.
+
+**[Learn more about the Max for Live integration →](docs/MAX-FOR-LIVE.md)**
+
 ## Support
 
 For bug reports and feature requests, please use the [GitHub Issues](https://github.com/effree/EM-Spec/issues) page.
