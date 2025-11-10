@@ -1,80 +1,66 @@
-# EM-Spec 0.3.7
+# EM-Spec
 
-A real-time audio spectrogram visualizer built with Electron that captures desktop audio without additional audio routing software.  Using the reassignment method this spectrogram can enhance low-end clarity.  Logorithmic frequency scaling to emulate human hearing and linear frequency scaling to use standard values.
+Real-time audio spectrogram visualizer with enhanced low-end and reassignment method implementation.
 
-An Ableton Live companion Max for Live device is available.  This device can be placed in your main chain within your Abelton Live Projects to hide and show the device when the "information box" is and isn't visible.  This allows you to place the spectrogram over the often unused information box space in the lower left of the appliaction, to appear as a built in device within Ableton Live.
+![EM-Spec Screenshot](assets/screenshot.png)
 
 ## Features
-- Real-time spectrogram visualization
-- Adjustable FFT and hop sizes
-- Frequency reassignment for enhanced low-end clarity
-- Low-end boost and noise gate controls
-- Freeze button to stop writing new data to the screen
-- 35 colormap options
-- Hover to see frequency and musical note information
-- Customizable settings that persist between sessions
-- Ableton Live companion M4L device to hide when info box is not visible
 
-## Requirements
-- Node.js (v16 or higher recommended)
-- npm or yarn
+- **Real-time Spectrogram Visualization** - See your audio in stunning detail
+- **Enhanced Low-End Response** - Optimized for music production and mixing
+- **Reassignment Method** - Advanced frequency analysis for sharper spectral detail
+- **Customizable Settings** - Adjust FFT size, color maps, gain, and more
+- **Always-On-Top Mode** - Keep the spectrogram visible while you work
+- **Automatic Gain Control** - Adaptive brightness for consistent visualization
+- **Multiple Color Maps** - Choose from various color schemes
 
-## Installation
+## Download
 
-1. Clone the repository:
-```bash
-git clone https://github.com/effree/em-spec.git
-cd em-spec
-```
+Download the latest version from the [Releases](https://github.com/effree/EM-Spec/releases) page.
 
-2. Install dependencies:
-```bash
-npm install
-```
+### Windows
+Download `EM-Spec-Setup-[version].exe` and run the installer.
 
-3. Run the application:
-```bash
-npm start
-```
+### macOS
+Download `EM-Spec-[version]-[arch].dmg`, open it, and drag EM-Spec to your Applications folder.
+
+## System Requirements
+
+- **Windows**: Windows 10 or later (64-bit)
+- **macOS**: macOS 10.13 or later (Intel and Apple Silicon)
 
 ## Usage
 
-- The application will capture your system audio automatically
-- Hover over the spectrogram to see frequency and note information
-- Click the settings gear icon to adjust visualization parameters
-- Drag the window from anywhere to reposition
+1. Launch EM-Spec
+2. The spectrogram will automatically start visualizing your system audio
+3. Click to drag
+4. Hover bottom right to access settings button
+5. Hold Shift and hover over the spectrogram to see note and frequency information
 
 ## Settings
 
-- **FFT Size**: Select the FFT size manually *Default: 4096
-- **Speed Adjustment**: Increase and decrease speed of spectrogram scroll
-- **Brightness**: Adjust clarity of brightness to colormap
-- **Colormap**: Choose from 35 options *Default: Inferno
-- **dB Range**: Adjust dynamic range (30-120 dB)
-- **Gain**: Overall amplitude boost
-- **Freq Scale**: Adjust between linear and logarithmic frequency scaling
-- **Low End Boost**: Enhance bass frequencies (1-10x)
-- **Noise Gate**: Filter out low-level noise (-120 to -40 dB)
-- **Smoothing**: Temporal smoothing of the display
-- **Enhanced**: Toggle frequency reassignment method
-- **Natural Audio**: Apply pink noise weighting
+- **FFT Size**: Frequency resolution (higher = more detail, more CPU)
+- **Scroll Speed**: How fast the spectrogram scrolls
+- **Color Map**: Visual style of the spectrogram
+- **dB Range**: Dynamic range of the display
+- **Gain**: Overall brightness
+- **Frequency Scale**: Zoom in/out on the frequency axis
+- **Low-End Boost**: Emphasize bass frequencies
+- **Smoothing**: Temporal smoothing for cleaner display
+- **Noise Gate**: Hide signals below this threshold
 
-## Screenshots
+## Auto-Updates
 
-- Spectrogram / Colormap / Hover on Corners
-![Spectrogram](/screenshots/spectrogram.png?raw=true "Spectrogram")
-![With colormap option](/screenshots/spectrogram-2.png?raw=true "With colormap option")
-![With colormap option](/screenshots/spectrogram-3.png?raw=true "With colormap option")
-![On corners hover](/screenshots/spectrogram-hover.png?raw=true "On corners hover")
-- Settings
-![Settings](/screenshots/spectrogram-settings.png?raw=true "Settings")
-![Settings colormaps](/screenshots/spectrogram-settings-colormap.png?raw=true "Settings displaying colormaps")
-- Hover Notes / Frequency
-![Notes and Frequency](/screenshots/spectrogram-notes-frequency.png?raw=true "Hover shows notes and frequency")
+EM-Spec automatically checks for updates on startup. When an update is available, you'll be notified in the settings window.
 
-## Development
+## Support
 
-Built with:
-- Electron
-- C++
-- electron-audio-loopback for system audio capture
+For bug reports and feature requests, please use the [GitHub Issues](https://github.com/effree/EM-Spec/issues) page.
+
+## License
+
+Copyright © 2025 Jeffrey Meyer
+
+---
+
+**Note**: This is a distribution repository for EM-Spec releases. The source code is maintained in a private repository.
