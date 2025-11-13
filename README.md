@@ -2,7 +2,7 @@
 
 Real-time audio spectrogram visualizer with enhanced low-end and reassignment method implementation.
 
-![EM-Spec Spectrogram](assets/screenshot.png) ![EM-Spec Settings](assets/screenshot-settings.png)
+![EM-Spec Spectrogram](assets/spectrogram.png) ![EM-Spec Settings](assets/settings.png)
 
 ## Features
 
@@ -13,6 +13,7 @@ Real-time audio spectrogram visualizer with enhanced low-end and reassignment me
 - **Always-On-Top Mode** - Keep the spectrogram visible while you work
 - **Automatic Gain Control** - Adaptive brightness for consistent visualization
 - **Multiple Color Maps** - Choose from various color schemes
+- **Presets** - Add, Edit and Delete custom presets
 
 ## Download
 
