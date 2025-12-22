@@ -2,18 +2,23 @@
 
 Real-time audio spectrogram visualizer with enhanced low-end and reassignment method implementation.
 
-![EM-Spec Spectrogram](assets/spectrogram.png) ![EM-Spec Settings](assets/settings.png)
+![EM-Spec Spectrogram](assets/ss-1.png) ![EM-Spec Settings](assets/ss-2.png) ![EM-Spec Settings](assets/ss-4.png) ![EM-Spec Settings](assets/ss-9.png)
 
 ## Features
 
 - **Real-time Spectrogram Visualization** - See your audio in stunning detail
 - **Enhanced Low-End Response** - Optimized for music production and mixing
 - **Reassignment Method** - Advanced frequency analysis for sharper spectral detail
+- **Stereoscope** - Advanced FFT based Stereo visualization
 - **Customizable Settings** - Adjust FFT size, color maps, gain, and more
 - **Always-On-Top Mode** - Keep the spectrogram visible while you work
 - **Automatic Gain Control** - Adaptive brightness for consistent visualization
 - **Multiple Color Maps** - Choose from various color schemes
 - **Presets** - Add, Edit and Delete custom presets
+- **Auto-Updates** - Automatic updates
+- **Max for Live Integration** - Show/hide spectrogram window based on Ableton Info View visibility
+- **Window Snap/Dock** - Snap/Dock the stereoscope and spectrogram together to appear as one window.
+
 
 ## Download
 
@@ -40,7 +45,7 @@ Download `EM-Spec-[version]-[arch].dmg`, open it, and drag EM-Spec to your Appli
 
 ## Settings
 
-- **FFT Size**: Frequency resolution (higher = more detail, more CPU)
+- **FFT Size**: Frequency resolution
 - **Scroll Speed**: How fast the spectrogram scrolls
 - **Color Map**: Visual style of the spectrogram
 - **dB Range**: Dynamic range of the display
